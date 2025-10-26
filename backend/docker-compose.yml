@@ -1,0 +1,32 @@
+# Docker Compose pour DringDring - Environnement de développement
+version: '3.8'
+
+services:
+  # Backend API
+  backend:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONPATH=/app
+      - ENVIRONMENT=development
+    volumes:
+      - .:/app  # Pour le développement (hot reload)
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Base de données (optionnel pour le développement)
+  # postgres:
+  #   image: postgres:13
+  #   environment:
+  #     POSTGRES_DB: dringdring
+  #     POSTGRES_USER: dringdring
+  #     POSTGRES_PASSWORD: password
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+
+# volumes:
+#   postgres_data:
+
+

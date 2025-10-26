@@ -1,0 +1,111 @@
+I want to create a web app that will help 
+Shops to send delivery request to pick up 
+grocery bag for their clients for delivery. 
+I want to call the application DringDring. 
+It has two type of users: Shops from where
+the delivery start and deliveryto-client to whom
+the delivery has to go. 
+
+ I want this app to be built using Next.js, and
+ I wanted to use Typescript, and the I want it
+ to make use of Tailwind as well.
+
+So the front-end should be created using Typescript,
+wheras the back-end, I want it to be created using
+Python. And I want the front-end to be a separate 
+concern
+and the back-end should be a separate concern.
+They should communicate with each other using 
+REST API.
+
+The application should start with providing a 
+login page
+so that the users (a shop or a shop's client
+ aka the deliveryto-client) can either sign up
+ or sign in to the app. For authorization, make
+ use of Google Firebase. If the user (shop/client) 
+ had
+ previously signed in, obviously they shouldn't come 
+ to the space; they should directly go to the app.
+ You should remember that the user has already 
+ logged in, 
+ and they just take them directly to the application. 
+
+ Once they have logged in, (if they havent aleady),
+ on the main page of the app, they should have fields
+ to help them enter their informations. 
+ 1. For the shop: Nom du Magasin, Personnes de contact
+ (max 10), Adresse,
+ Numéro de l'adresse, NPA (swiss format), Ville, 
+ emai, Tél (swiss format), nombre de département: 1-10.
+ linked to the number of departements provided:
+ Nom du département 1, Nom du département 2, ... 
+ Nom du département 10
+ I'll provide a csv file with a list of shops
+2. For the deliveryto-user: Nom, Prénom, Adresse,
+Numéro de l'adresse, NPA (swiss format), Ville, 
+ email, Tél: (swiss format), étage, code d'entrée, 
+ CMS (yes/no)
+ This CMS means if the client is a beneficiar of
+ the services of Centre Médico-Social and theirfor he 
+ has a discount. 
+ I will provide a csv file with a list of 
+ delivery-to clients.
+
+ If the user is a shop, after signing up or loging in,
+ the user has access to a menu page where they have 
+2 buttoms to access to twos new pages: 
+1.Livraison +
+2.clients +
+on edit profile buttom where the user can edit delete 
+and add
+information such as personne de contact, département, ...
+And a filed with all the "livraisons en cours" which is
+a editable table (edit/delete) of all deliveries of 
+today and 
+in the future.
+A table that summirize per (year/month/day) the #livraisons
+# de sacs, # livraisons/département
+with column: Date/Ticket no/Montant du 
+ticket/#Sacs/Secteur/CMS
+When clicking on "Livraison +", they have access
+to a page to add a new delivery. First they choose a client
+thanks to a field, (autopopulate when you start writing)
+the first letter of a client's name/family name, ....
+If the client is new and not in the database yet, 
+you can create
+a with a "clients +" buttom. it will send the user to 
+a new page, same page as if the shop user click on 
+the "clients +" buttom of the main menu page after logged
+in. On this page, the user can add a new client. He cant 
+edit or delete, this is only possible by the admin
+of the website. a new client get an access code to access
+to his info and edit/delete them. 
+then the user need to enter this fileds: 
+Employé(e): list personne de contact created when 
+signed in.
+Secteur(not mendatory): a list of departements 
+store created when signed in. 
+Ticket no(not mendatory):
+Montant du (not mendatory):
+Livraison aujourd'hui: Oui/non 
+A partir de: 08:00 - 20:00 par pas de 30min
+Nombre de sacs: 0-20
+buttom "Commander la livraison"
+When the user click on "Commander la livraison", 
+1.a new line will be created in his database Livraison
+with all the informations (clients info) and a unique ID
+(state of the art)
+2. a new line will be created in the main database "Toutes 
+les livraisons"
+of the manager/owner of this app
+with all the informations (clients info, livraison info, 
+and shop name) and a unique ID
+(state of the art)
+If a Livraison is edited/delited, it should be in both database. 
+
+if a new deliveryto-client signed in. They have access to a mainmenu
+They can edit/delete their account
+they have a dashboard that summirize they past deliveries state of the
+art datavizualisation.
+they have a table for their future deliveries. 
