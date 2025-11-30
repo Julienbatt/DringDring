@@ -295,10 +295,10 @@ export default function ShopDeliveriesPage() {
     setEditingDelivery(delivery);
   };
 
-  const handleSaveDelivery = (updatedDelivery: ShopDelivery) => {
+  const handleSaveDelivery = (updatedDelivery: Partial<ShopDelivery> & { id: string; date: string; timeSlot: string; bags: number }) => {
     setDeliveries(prev => 
       prev.map(delivery => 
-        delivery.id === updatedDelivery.id ? updatedDelivery : delivery
+        delivery.id === updatedDelivery.id ? { ...delivery, ...updatedDelivery } as ShopDelivery : delivery
       )
     );
     setEditingDelivery(null);

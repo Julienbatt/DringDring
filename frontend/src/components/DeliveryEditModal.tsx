@@ -9,7 +9,7 @@ type Delivery = {
   date: string;
   timeSlot: string;
   shopName: string;
-  shopAddress: string;
+  shopAddress?: string;
   bags: number;
   status: 'scheduled' | 'confirmed' | 'in_progress' | 'delivered' | 'cancelled';
   totalAmount: number;
@@ -21,7 +21,7 @@ type DeliveryEditModalProps = {
   delivery: Delivery | null;
   isOpen: boolean;
   onClose: () => void;
-  onSave: (updatedDelivery: Delivery) => void;
+  onSave: (updatedDelivery: Partial<Delivery> & { id: string; date: string; timeSlot: string; bags: number }) => void;
 };
 
 export default function DeliveryEditModal({ delivery, isOpen, onClose, onSave }: DeliveryEditModalProps) {

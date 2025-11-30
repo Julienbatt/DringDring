@@ -291,13 +291,19 @@ export default function HQAdminDeliveriesPage() {
       return;
     }
     
-    setEditingDelivery(delivery);
+    // Convertir HQDelivery en format attendu par DeliveryEditModal
+    const modalDelivery = {
+      ...delivery,
+      shopAddress: undefined, // HQDelivery n'a pas shopAddress
+    };
+    setEditingDelivery(modalDelivery as any);
   };
 
-  const handleSaveDelivery = (updatedDelivery: HQDelivery) => {
+  const handleSaveDelivery = (updatedDelivery: Partial<HQDelivery> & { id: string; date: string; timeSlot: string; bags: number }) => {
+    // Convertir le Delivery du modal en HQDelivery
     setDeliveries(prev => 
       prev.map(delivery => 
-        delivery.id === updatedDelivery.id ? updatedDelivery : delivery
+        delivery.id === updatedDelivery.id ? { ...delivery, ...updatedDelivery } as HQDelivery : delivery
       )
     );
     setEditingDelivery(null);
