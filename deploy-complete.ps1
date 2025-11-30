@@ -195,7 +195,7 @@ Write-Host @"
    = https://dringdring-backend-11897a1e3635.herokuapp.com
 
    NEXT_PUBLIC_FIREBASE_API_KEY
-   = AIzaSyAYE7Q8B8ikIRvDYjb3hvhVSaJAXiz9B34
+   = VOTRE_FIREBASE_API_KEY_ICI
 
    NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
    = dringdring-11a84.firebaseapp.com

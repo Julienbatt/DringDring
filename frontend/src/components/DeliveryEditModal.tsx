@@ -69,7 +69,7 @@ export default function DeliveryEditModal({ delivery, isOpen, onClose, onSave }:
     if (bags <= 6) return 45.0;
     if (bags <= 8) return 60.0;
     if (bags <= 10) return 75.0;
-    return ((bags - 1) // 2 + 1) * 15.0;
+    return (Math.floor((bags - 1) / 2) + 1) * 15.0;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
