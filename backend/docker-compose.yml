@@ -20,8 +20,9 @@ services:
       - FIREBASE_AUTH_URI=${FIREBASE_AUTH_URI:-https://accounts.google.com/o/oauth2/auth}
       - FIREBASE_TOKEN_URI=${FIREBASE_TOKEN_URI:-https://oauth2.googleapis.com/token}
       # Sécurité
-      - SECRET_KEY=dringdring-super-secret-key-2025-production
-      - JWT_SECRET_KEY=dringdring-jwt-secret-key-2025-production
+      # ⚠️ ATTENTION: Les vraies valeurs doivent être dans un fichier .env (non commité)
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-here}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-jwt-secret-key-here}
       # CORS
       - ALLOWED_ORIGINS=http://localhost:3000,http://localhost:8000
     volumes:

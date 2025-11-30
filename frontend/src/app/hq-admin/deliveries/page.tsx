@@ -286,7 +286,7 @@ export default function HQAdminDeliveriesPage() {
     const isPastDelivery = deliveryDate < now || delivery.status === 'delivered' || delivery.status === 'cancelled';
     
     if (isPastDelivery) {
-      showToast("Cette livraison ne peut plus être modifiée", "warning");
+      showToast("Cette livraison ne peut plus être modifiée", "info");
       return;
     }
     

@@ -21,8 +21,18 @@ export async function apiGet<T>(path: string, options?: RequestInit): Promise<T>
 
 export const getHealth = () => apiGet<{status: string}>("/health");
 
-export async function getMe(token: string) {
-  return apiGet("/auth/me", {
+export type Me = {
+  userId: string;
+  email?: string;
+  roles: string[];
+  shopId?: string | null;
+  clientId?: string | null;
+  regionId?: string | null;
+  chainId?: string | null;
+};
+
+export async function getMe(token: string): Promise<Me> {
+  return apiGet<Me>("/auth/me", {
     headers: {
       Authorization: `Bearer ${token}`,
     },

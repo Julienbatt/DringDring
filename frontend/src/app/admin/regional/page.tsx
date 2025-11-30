@@ -130,14 +130,17 @@ export default function RegionalAdminPage() {
         new Date(d.date) >= sevenDaysAgo
       );
       
+      // Ensure status is properly typed
+      const status: 'active' | 'inactive' = hasRecentActivity ? 'active' : 'inactive';
+      
       return {
-        id: shop.id,
-        name: shop.name,
+        id: shop.id || '',
+        name: shop.name || '',
         chain: shop.chain || 'Autre',
         deliveries: totalDeliveries,
         revenue: totalRevenue,
         lastDelivery: lastDelivery ? new Date(lastDelivery).toISOString().split('T')[0] : 'Aucune',
-        status: hasRecentActivity ? 'active' : 'inactive'
+        status
       };
     }).sort((a, b) => b.revenue - a.revenue);
   };

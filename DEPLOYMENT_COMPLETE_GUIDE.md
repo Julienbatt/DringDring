@@ -63,7 +63,7 @@ Cliquez sur **"Environment Variables"** et ajoutez chacune :
 | Variable | Valeur | Environnements |
 |----------|--------|----------------|
 | `NEXT_PUBLIC_API_BASE_URL` | `https://dringdring-backend-11897a1e3635.herokuapp.com` | Production, Preview, Development |
-| `NEXT_PUBLIC_FIREBASE_API_KEY` | `AIzaSyAYE7Q8B8ikIRvDYjb3hvhVSaJAXiz9B34` | Production, Preview, Development |
+| `NEXT_PUBLIC_FIREBASE_API_KEY` | `VOTRE_FIREBASE_API_KEY` (récupérer depuis Firebase Console) | Production, Preview, Development |
 | `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | `dringdring-11a84.firebaseapp.com` | Production, Preview, Development |
 | `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | `dringdring-11a84` | Production, Preview, Development |
 | `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` | `dringdring-11a84.firebasestorage.app` | Production, Preview, Development |

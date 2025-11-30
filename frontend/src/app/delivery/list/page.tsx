@@ -144,8 +144,8 @@ export default function DeliveryListPage() {
             <label className="text-xs text-gray-600">Employé(e)</label>
             <input className="border p-1" value={employee} onChange={e=>setEmployee(e.target.value)} placeholder="ex: Jean" />
           </div>
-          <button className="px-3 py-2 border rounded" onClick={()=>load()}>Filtrer</button>
-          <button className="px-3 py-2 border rounded" onClick={()=>{ setDateFrom(""); setDateTo(""); setSector(""); setEmployee(""); load(); }}>Réinitialiser</button>
+          <button className="px-3 py-2 border rounded" onClick={()=>{ void load(); }}>Filtrer</button>
+          <button className="px-3 py-2 border rounded" onClick={()=>{ setDateFrom(""); setDateTo(""); setSector(""); setEmployee(""); void load(); }}>Réinitialiser</button>
         </div>
         <table className="min-w-full border">
           <thead className="bg-gray-50">
@@ -231,9 +231,9 @@ export default function DeliveryListPage() {
           </tbody>
         </table>
         <div className="flex items-center gap-3">
-          <button className="px-4 py-2 border rounded" onClick={load}>Refresh</button>
-          <button className="px-2 py-1 border rounded text-xs" disabled={prevStack.length<=1} onClick={()=>load('prev')}>Précédent</button>
-          <button className="px-2 py-1 border rounded text-xs" disabled={!nextCursor} onClick={()=>load('next')}>Suivant</button>
+          <button className="px-4 py-2 border rounded" onClick={()=>{ void load(); }}>Refresh</button>
+          <button className="px-2 py-1 border rounded text-xs" disabled={prevStack.length<=1} onClick={()=>{ void load('prev'); }}>Précédent</button>
+          <button className="px-2 py-1 border rounded text-xs" disabled={!nextCursor} onClick={()=>{ void load('next'); }}>Suivant</button>
         </div>
       </main>
     </AuthGate>

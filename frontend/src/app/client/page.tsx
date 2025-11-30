@@ -3,17 +3,10 @@ import { useEffect, useState } from "react";
 import ClientLayout from "@/components/ClientLayout";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import LoadingSpinner from "@/components/LoadingSpinner";
-import { getMe, apiAuthGet } from "@/lib/api";
+import { getMe, apiAuthGet, type Me } from "@/lib/api";
 import { auth } from "@/lib/firebase";
 import { getIdToken, onAuthStateChanged } from "firebase/auth";
 import Link from "next/link";
-
-type Me = {
-  userId: string;
-  email?: string;
-  roles: string[];
-  shopId?: string | null;
-};
 
 type ClientStats = {
   totalDeliveries: number;

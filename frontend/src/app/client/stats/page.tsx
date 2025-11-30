@@ -113,7 +113,7 @@ export default function ClientStatsPage() {
       return acc;
     }, {} as Record<string, { deliveries: number; spent: number }>);
 
-    const deliveriesByShop = Object.entries(shopStats)
+    const deliveriesByShop = (Object.entries(shopStats) as [string, { deliveries: number; spent: number }][])
       .map(([shopName, data]) => ({
         shopName,
         deliveries: data.deliveries,
@@ -135,7 +135,7 @@ export default function ClientStatsPage() {
       return acc;
     }, {} as Record<string, number>);
 
-    const deliveriesByStatus = Object.entries(statusStats)
+    const deliveriesByStatus = (Object.entries(statusStats) as [string, number][])
       .map(([status, count]) => ({
         status: getStatusText(status as any),
         count,
@@ -153,7 +153,7 @@ export default function ClientStatsPage() {
       return acc;
     }, {} as Record<string, { deliveries: number; spent: number }>);
 
-    const deliveriesByMonth = Object.entries(monthlyStats)
+    const deliveriesByMonth = (Object.entries(monthlyStats) as [string, { deliveries: number; spent: number }][])
       .map(([month, data]) => ({ month, deliveries: data.deliveries, spent: data.spent }))
       .sort((a, b) => new Date(b.month).getTime() - new Date(a.month).getTime());
 
@@ -167,7 +167,7 @@ export default function ClientStatsPage() {
       return acc;
     }, {} as Record<string, number>);
 
-    const spendingTrend = Object.entries(weeklySpending)
+    const spendingTrend = (Object.entries(weeklySpending) as [string, number][])
       .map(([week, amount]) => ({ period: `Semaine ${week}`, amount }))
       .sort((a, b) => parseInt(a.period.split(' ')[1]) - parseInt(b.period.split(' ')[1]));
 

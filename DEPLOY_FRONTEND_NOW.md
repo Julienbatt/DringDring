@@ -85,7 +85,7 @@ Vous avez déjà ces valeurs depuis Firebase Console. Ajoutez-les :
 
 ```
 NEXT_PUBLIC_FIREBASE_API_KEY
-Valeur : AIzaSyAYE7Q8B8ikIRvDYjb3hvhVSaJAXiz9B34
+Valeur : VOTRE_FIREBASE_API_KEY (récupérer depuis Firebase Console → Project Settings → General → Your apps)
 Environnements : Production, Preview, Development
 
 NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
