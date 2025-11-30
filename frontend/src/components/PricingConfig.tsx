@@ -228,7 +228,7 @@ export default function PricingConfig({ initialConfig, onSave, disabled = false 
             />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Prix > seuil (CHF)</label>
+            <label className="block text-sm font-medium mb-1">Prix &gt; seuil (CHF)</label>
             <input
               type="number"
               min="0"
@@ -253,7 +253,7 @@ export default function PricingConfig({ initialConfig, onSave, disabled = false 
             />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Prix CMS > seuil (CHF)</label>
+            <label className="block text-sm font-medium mb-1">Prix CMS &gt; seuil (CHF)</label>
             <input
               type="number"
               min="0"
@@ -332,7 +332,7 @@ export default function PricingConfig({ initialConfig, onSave, disabled = false 
         {config.mode === "amount" && config.amount && (
           <div className="text-sm text-blue-800">
             <p>• Panier 50 CHF ≤ {config.amount.threshold} CHF → {config.amount.priceBelowOrEqual} CHF</p>
-            <p>• Panier 100 CHF > {config.amount.threshold} CHF → {config.amount.priceAbove} CHF</p>
+            <p>• Panier 100 CHF &gt; {config.amount.threshold} CHF → {config.amount.priceAbove} CHF</p>
             {config.amount.cmsPriceBelowOrEqual && (
               <p>• CMS: Panier 50 CHF → {config.amount.cmsPriceBelowOrEqual} CHF</p>
             )}
