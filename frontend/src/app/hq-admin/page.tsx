@@ -104,12 +104,13 @@ export default function HQAdminDashboard() {
       return acc;
     }, {} as Record<string, { shops: Set<string>, deliveries: number, revenue: number }>);
     
-    const regions = Object.entries(regionStats).map(([name, data]) => ({
-      name,
-      shops: data.shops.size,
-      deliveries: data.deliveries,
-      revenue: data.revenue
-    })).sort((a, b) => b.revenue - a.revenue);
+    const regions = (Object.entries(regionStats) as [string, { shops: Set<string>, deliveries: number, revenue: number }][])
+      .map(([name, data]) => ({
+        name,
+        shops: data.shops.size,
+        deliveries: data.deliveries,
+        revenue: data.revenue
+      })).sort((a, b) => b.revenue - a.revenue);
     
     return {
       totalShops,

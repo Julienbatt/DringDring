@@ -97,8 +97,8 @@ export default function HQAdminReportsPage() {
       return acc;
     }, {} as Record<string, { deliveries: number; revenue: number }>);
 
-    const topShops = Object.entries(shopStats)
-      .map(([name, data]) => ({ name, ...data }))
+    const topShops = (Object.entries(shopStats) as [string, { deliveries: number; revenue: number }][])
+      .map(([name, data]) => ({ name, deliveries: data.deliveries, revenue: data.revenue }))
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 10);
 
@@ -113,8 +113,8 @@ export default function HQAdminReportsPage() {
       return acc;
     }, {} as Record<string, { deliveries: number; revenue: number }>);
 
-    const deliveriesByDayArray = Object.entries(deliveriesByDay)
-      .map(([date, data]) => ({ date, ...data }))
+    const deliveriesByDayArray = (Object.entries(deliveriesByDay) as [string, { deliveries: number; revenue: number }][])
+      .map(([date, data]) => ({ date, deliveries: data.deliveries, revenue: data.revenue }))
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
     // Livraisons par région

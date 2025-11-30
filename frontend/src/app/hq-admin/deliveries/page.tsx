@@ -292,11 +292,19 @@ export default function HQAdminDeliveriesPage() {
     }
     
     // Convertir HQDelivery en format attendu par DeliveryEditModal
-    const modalDelivery = {
-      ...delivery,
+    const modalDelivery: any = {
+      id: delivery.id,
+      date: delivery.date,
+      timeSlot: delivery.timeSlot,
+      shopName: delivery.shopName,
       shopAddress: undefined, // HQDelivery n'a pas shopAddress
+      bags: delivery.bags,
+      status: delivery.status,
+      totalAmount: delivery.totalAmount,
+      notes: delivery.notes,
+      createdAt: delivery.createdAt,
     };
-    setEditingDelivery(modalDelivery as any);
+    setEditingDelivery(modalDelivery);
   };
 
   const handleSaveDelivery = (updatedDelivery: Partial<HQDelivery> & { id: string; date: string; timeSlot: string; bags: number }) => {
