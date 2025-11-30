@@ -57,7 +57,7 @@ export default function ShopDeliveriesPage() {
   const [isExporting, setIsExporting] = useState(false);
   
   // Modal de modification
-  const [editingDelivery, setEditingDelivery] = useState<ShopDelivery | null>(null);
+  const [editingDelivery, setEditingDelivery] = useState<any>(null);
   
   // Actions
   const [selectedDeliveries, setSelectedDeliveries] = useState<string[]>([]);
@@ -292,7 +292,13 @@ export default function ShopDeliveriesPage() {
       return;
     }
     
-    setEditingDelivery(delivery);
+    // Convertir ShopDelivery en format attendu par DeliveryEditModal
+    const modalDelivery: any = {
+      ...delivery,
+      shopName: delivery.clientName, // ShopDelivery n'a pas shopName, utiliser clientName
+      shopAddress: delivery.clientAddress, // ShopDelivery n'a pas shopAddress, utiliser clientAddress
+    };
+    setEditingDelivery(modalDelivery);
   };
 
   const handleSaveDelivery = (updatedDelivery: Partial<ShopDelivery> & { id: string; date: string; timeSlot: string; bags: number }) => {
@@ -345,12 +351,12 @@ export default function ShopDeliveriesPage() {
 
   const handleModifyDelivery = async (deliveryId: string) => {
     try {
-      showToast("Fonctionnalité de modification en cours de développement", "info");
-      setEditingDelivery(deliveryId);
-      
-      setTimeout(() => {
-        setEditingDelivery(null);
-      }, 2000);
+      const delivery = deliveries.find(d => d.id === deliveryId);
+      if (!delivery) {
+        showToast("Livraison introuvable", "error");
+        return;
+      }
+      handleEditDelivery(delivery);
     } catch (error: any) {
       console.error("Error modifying delivery:", error);
       showToast("Erreur lors de la modification de la livraison", "error");
@@ -850,10 +856,10 @@ export default function ShopDeliveriesPage() {
                       <div className="flex space-x-2">
                         <button 
                           onClick={() => handleModifyDelivery(delivery.id)}
-                          disabled={editingDelivery === delivery.id || delivery.status === 'delivered' || delivery.status === 'cancelled'}
+                          disabled={editingDelivery?.id === delivery.id || delivery.status === 'delivered' || delivery.status === 'cancelled'}
                           className="text-blue-600 hover:text-blue-900 text-xs disabled:text-gray-400 disabled:cursor-not-allowed"
                         >
-                          {editingDelivery === delivery.id ? "Modification..." : "✏️ Modifier"}
+                          {editingDelivery?.id === delivery.id ? "Modification..." : "✏️ Modifier"}
                         </button>
                         <button 
                           onClick={() => handleCancelDelivery(delivery.id)}
