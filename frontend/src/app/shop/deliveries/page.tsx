@@ -6,6 +6,7 @@ import LoadingSpinner from "@/components/LoadingSpinner";
 import { apiAuthGet, apiAuthPut } from "@/lib/api";
 import { showToast } from "@/lib/toast";
 import Link from "next/link";
+import DeliveryEditModal from "@/components/DeliveryEditModal";
 
 type ShopDelivery = {
   id: string;

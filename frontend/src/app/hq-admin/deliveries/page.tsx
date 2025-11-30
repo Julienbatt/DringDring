@@ -4,6 +4,7 @@ import HQAdminLayout from "@/components/HQAdminLayout";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import { apiAuthGet } from "@/lib/api";
 import { showToast } from "@/lib/toast";
+import DeliveryEditModal from "@/components/DeliveryEditModal";
 
 type HQDelivery = {
   id: string;
