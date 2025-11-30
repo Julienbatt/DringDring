@@ -35,20 +35,42 @@ def _init_firebase_if_needed() -> None:
         except ValueError:
             pass
 
-        cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        # Try environment variables first (for Docker)
+        project_id = os.getenv("FIREBASE_PROJECT_ID")
+        private_key = os.getenv("FIREBASE_PRIVATE_KEY")
+        client_email = os.getenv("FIREBASE_CLIENT_EMAIL")
+        
         try:
-            if cred_path and os.path.exists(cred_path):
-                cred = credentials.Certificate(cred_path)
+            if project_id and private_key and client_email:
+                # Use environment variables for Firebase credentials
+                import json
+                cred_dict = {
+                    "type": "service_account",
+                    "project_id": project_id,
+                    "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID", ""),
+                    "private_key": private_key.replace("\\n", "\n"),
+                    "client_email": client_email,
+                    "client_id": os.getenv("FIREBASE_CLIENT_ID", ""),
+                    "auth_uri": os.getenv("FIREBASE_AUTH_URI", "https://accounts.google.com/o/oauth2/auth"),
+                    "token_uri": os.getenv("FIREBASE_TOKEN_URI", "https://oauth2.googleapis.com/token"),
+                }
+                cred = credentials.Certificate(cred_dict)
                 _initialized_app = firebase_admin.initialize_app(cred)
             else:
-                # Attempt default credentials (e.g., when running in Cloud Run)
-                _initialized_app = firebase_admin.initialize_app()
+                # Fallback to file-based credentials
+                cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+                if cred_path and os.path.exists(cred_path):
+                    cred = credentials.Certificate(cred_path)
+                    _initialized_app = firebase_admin.initialize_app(cred)
+                else:
+                    # Attempt default credentials (e.g., when running in Cloud Run)
+                    _initialized_app = firebase_admin.initialize_app()
         except ValueError:
             # Another thread/process initialized concurrently; retrieve reference
             _initialized_app = firebase_admin.get_app()
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(
-                "Firebase Admin SDK could not initialize. Set GOOGLE_APPLICATION_CREDENTIALS."
+                "Firebase Admin SDK could not initialize. Set FIREBASE_* environment variables or GOOGLE_APPLICATION_CREDENTIALS."
             ) from exc
 
 
@@ -87,5 +109,4 @@ def get_current_user(authorization: str = Header(default="")) -> CurrentUser:
         region_id=decoded.get("regionId"),
         chain_id=decoded.get("chainId"),
     )
-
 

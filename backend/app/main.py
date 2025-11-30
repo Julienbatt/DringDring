@@ -9,7 +9,7 @@ import logging
 import uuid
 
 from .dependencies.auth import get_current_user, CurrentUser
-from .routers import shops, clients, deliveries, reports, admin, ux, documentation
+from .routers import shops, clients, deliveries, reports, admin, ux, documentation, client_stats, test_endpoints
 
 
 class HealthResponse(BaseModel):
@@ -120,5 +120,7 @@ app.include_router(reports.router)
 app.include_router(admin.router)
 app.include_router(ux.router)
 app.include_router(documentation.router)
+app.include_router(client_stats.router)
+app.include_router(test_endpoints.router)
 
 

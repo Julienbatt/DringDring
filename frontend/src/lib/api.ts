@@ -31,9 +31,20 @@ export async function getMe(token: string) {
 
 async function getAuthHeader(): Promise<Record<string, string>> {
   const user = auth.currentUser;
-  if (!user) return {};
-  const token = await getIdToken(user, true);
-  return { Authorization: `Bearer ${token}` };
+  if (!user) {
+    console.error("❌ Aucun utilisateur Firebase connecté");
+    return {};
+  }
+  
+  try {
+    const token = await getIdToken(user, true);
+    console.log("🔑 Token Firebase obtenu:", token ? "✅ Valide" : "❌ Invalide");
+    console.log("👤 User UID:", user.uid);
+    return { Authorization: `Bearer ${token}` };
+  } catch (error) {
+    console.error("❌ Erreur lors de l'obtention du token:", error);
+    return {};
+  }
 }
 
 export async function apiAuthGet<T>(path: string): Promise<T> {
@@ -55,7 +66,7 @@ export async function apiAuthPost<T>(path: string, body: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
-export async function apiAuthDelete<T = any>(path: string): Promise<T> {
+export async function apiAuthDelete<T = unknown>(path: string): Promise<T> {
   const headers = await getAuthHeader();
   const res = await fetch(`${API_BASE}${path}`, { method: "DELETE", headers });
   if (!res.ok) throw new Error(`DELETE ${path} ${res.status}`);
@@ -73,6 +84,20 @@ export async function apiAuthPatch<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`PATCH ${path} ${res.status}`);
+  return (await res.json()) as T;
+}
+
+export async function apiAuthPut<T>(path: string, body: unknown): Promise<T> {
+  const headers = {
+    ...(await getAuthHeader()),
+    "Content-Type": "application/json",
+  } as Record<string, string>;
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`PUT ${path} ${res.status}`);
   return (await res.json()) as T;
 }
 

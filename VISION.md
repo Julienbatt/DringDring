@@ -100,6 +100,86 @@ Upon submission:
 - Nombre de sacs: 0–20
 - Unique ID for each delivery (globally unique)
 
+## Tarification
+
+### Tarif par nombre de sacs (Sion)
+- **1-2 sacs** : 15 CHF (5 CHF facturé au client, 5 CHF au magasin, 5 CHF à la ville)
+- **3-4 sacs** : 30 CHF (10 CHF facturé au client, 10 CHF au magasin, 10 CHF à la ville)
+- **5-6 sacs** : 45 CHF (15 CHF facturé au client, 15 CHF au magasin, 15 CHF à la ville)
+- **Logique** : Tarif par tranche de 2 sacs
+
+### Tarif CMS (bénéficiaires)
+- **1-2 sacs** : 10 CHF (tarif réduit pour bénéficiaires CMS)
+- **3-4 sacs** : 20 CHF
+- **5-6 sacs** : 30 CHF
+- **Logique** : Tarif réduit par tranche de 2 sacs
+
+### Tarif par montant de commande (autres magasins)
+- **≤ 80 CHF** : 15 CHF
+- **> 80 CHF** : 30 CHF
+- **Logique** : Basé sur le montant total de la commande
+
+### Système de facturation
+Vélocité reçoit le tarif total mais doit facturer les contributions aux autres parties :
+
+#### Exemple : Livraison 15 CHF
+- **Vélocité reçoit** : 15 CHF (total de la course)
+- **Facture magasin** : 5 CHF (participation au service)
+- **Facture client** : 5 CHF (coût de la livraison)
+- **Facture autorités** : 5 CHF (soutien à l'activité sociale)
+
+#### Processus de facturation
+1. **Livraison effectuée** : Vélocité reçoit 15 CHF
+2. **Génération des factures** : 3 factures de 5 CHF chacune
+3. **Envoi des factures** :
+   - Facture au magasin (5 CHF)
+   - Facture au client (5 CHF)
+   - Facture aux autorités (5 CHF)
+4. **Suivi des paiements** : Traçabilité des règlements
+
+#### Exemple : Livraison 30 CHF (3-4 sacs)
+- **Vélocité** : 10 CHF
+- **Magasin** : 10 CHF
+- **Client** : 10 CHF
+- **Autorités** : 10 CHF
+
+#### Logique de répartition
+- **Vélocité** : Rémunération du service de livraison et maintenance de la plateforme
+- **Magasin** : Participation au service, incitation à utiliser le système
+- **Client** : Coût direct de la livraison à domicile
+- **Autorités** : Soutien financier à l'activité sociale et à la mobilité durable
+
+### Configuration des tarifs
+- **Admin Régional** : Peut modifier les tarifs pour sa région (ex: Vélocité Sion)
+- **Tarifs par région** : Chaque région peut avoir ses propres tarifs
+- **Tarifs par magasin** : Possibilité de tarifs spécifiques par magasin
+- **Historique** : Traçabilité des modifications de tarifs
+
+## Stratégie de connexion
+
+### Page d'accueil publique (`/`)
+- **Design attractif** : Interface moderne et accueillante
+- **Choix du type d'utilisateur** : 4 cartes distinctes
+- **Navigation intuitive** : Boutons clairs pour chaque rôle
+- **Informations sur le service** : Présentation de DringDring
+
+### Pages de login spécialisées
+- **`/login/shop`** : Interface professionnelle pour les magasins
+- **`/login/hq-admin`** : Interface pour les HQ Admin (enseignes)
+- **`/login/regional`** : Interface pour les admins régionaux
+
+### Logique de redirection
+- **Clients** : Accès direct à `/client` (pas de login requis)
+- **Magasins** : Login → `/shop`
+- **HQ Admin** : Login → `/hq-admin` (gestion multi-magasin par enseigne)
+- **Admins régionaux** : Login → `/regional` (gestion régionale)
+
+### Hiérarchie des rôles
+1. **Super Admin** (DringDring) : Accès global, toutes les régions
+2. **Regional Admin** (Vélocité Sion) : Gestion régionale, tarifs régionaux
+3. **HQ Admin** (Migros Valais) : Gestion des magasins de l'enseigne par région
+4. **Magasin** (Metropole Migros Sion) : Gestion du magasin individuel
+
 ## Architecture and Tech Stack
 
 - Frontend: Next.js + TypeScript + Tailwind CSS (separate project)

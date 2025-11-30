@@ -1,146 +1,216 @@
 "use client";
-import { useEffect, useState } from "react";
-import AuthGate from "@/components/AuthGate";
-import { getHealth, getMe, apiAuthPost, apiAuthGet, exportShopToSheets, listShops, type Shop } from "@/lib/api";
-import { auth } from "@/lib/firebase";
-import { getIdToken, onAuthStateChanged } from "firebase/auth";
+import Link from "next/link";
+import { useState, useCallback } from "react";
 
-export default function Home() {
-  const [health, setHealth] = useState<string>("checking...");
-  const [me, setMe] = useState<any>(null);
-  const [shops, setShops] = useState<Shop[]>([]);
-  const [selectedShop, setSelectedShop] = useState<string>("");
+type HoveredCardType = 'client' | 'shop' | 'hq-admin' | 'regional' | null;
 
-  useEffect(() => {
-    getHealth().then((x) => setHealth(x.status)).catch(() => setHealth("error"));
+export default function HomePage() {
+  const [hoveredCard, setHoveredCard] = useState<HoveredCardType>(null);
+  
+  const handleMouseEnter = useCallback((card: HoveredCardType) => {
+    setHoveredCard(card);
   }, []);
-
-  useEffect(() => {
-    // load shops for admin
-    (async () => {
-      try {
-        if (me?.roles?.includes("admin")) {
-          const s = await listShops();
-          setShops(s);
-          const saved = localStorage.getItem("adminSelectedShopId") || "";
-          if (saved) setSelectedShop(saved);
-        } else {
-          setShops([]);
-          setSelectedShop("");
-        }
-      } catch {}
-    })();
-  }, [me]);
-
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (user) => {
-      if (!user) {
-        setMe(null);
-        return;
-      }
-      try {
-        const t = await getIdToken(user, true);
-        const meResp = await getMe(t);
-        setMe(meResp);
-      } catch {
-        setMe(null);
-      }
-    });
-    return () => unsub();
+  
+  const handleMouseLeave = useCallback(() => {
+    setHoveredCard(null);
   }, []);
 
   return (
-    <AuthGate>
-      <main className="p-6 space-y-4">
-      <h1 className="text-2xl font-bold">DringDring</h1>
-        <p className="mt-2">Backend health: <span className="font-mono">{health}</span></p>
-        {me && (
-          <pre className="mt-4 p-3 bg-gray-100 rounded text-sm overflow-auto">{JSON.stringify(me, null, 2)}</pre>
-        )}
-        <div className="space-x-2">
-          <button
-            className="px-3 py-2 border rounded"
-            onClick={async () => {
-              try {
-                const created = await apiAuthPost<{id: string}>("/clients", {
-                  firstName: "Jean",
-                  lastName: "Dupont",
-                  address: { street: "Rue du Test", streetNumber: "1", zip: "1950", city: "Sion" },
-                  email: "jean.dupont@example.com",
-                  phone: "+41 79 000 00 00",
-                  cms: false,
-                });
-                alert(`Client created: ${created.id}`);
-              } catch (e:any) { alert(e.message); }
-            }}
-          >
-            Create sample client
-          </button>
-          <button
-            className="px-3 py-2 border rounded"
-            onClick={async () => {
-              try {
-                const list = await apiAuthGet<any[]>("/clients?query=dup");
-                alert(`Found ${list.length} clients matching 'dup'`);
-              } catch (e:any) { alert(e.message); }
-            }}
-          >
-            Search clients 'dup'
-          </button>
-          {me?.roles?.includes("admin") && (
-            <span className="inline-flex items-center gap-2">
-              <select
-                className="px-2 py-2 border rounded"
-                value={selectedShop || me?.shopId || ""}
-                onChange={(e) => {
-                  setSelectedShop(e.target.value);
-                  localStorage.setItem("adminSelectedShopId", e.target.value);
-                }}
-              >
-                <option value={me?.shopId || ""}>
-                  {me?.shopId ? `Shop courant (${me?.shopId})` : "(aucun shop lié)"}
-                </option>
-                {shops.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name || s.id}</option>
-                ))}
-              </select>
-            </span>
-          )}
-          {me?.roles?.includes("admin") && (
-            <button
-              className="px-3 py-2 border rounded bg-yellow-50"
-              onClick={async () => {
-                try {
-                  const sid = selectedShop || me?.shopId;
-                  if (!sid) { alert("Sélectionne un shop"); return; }
-                  const out = await exportShopToSheets(sid);
-                  alert(`Feuille resynchronisée: ${out.rows} lignes`);
-                } catch (e:any) { alert(e.message); }
-              }}
-            >
-              Resynchroniser la feuille (shop)
-            </button>
-          )}
+    <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50">
+      {/* Header */}
+      <header className="bg-white shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center py-6">
+            <div className="flex items-center">
+              <div className="w-10 h-10 bg-green-600 rounded-lg flex items-center justify-center">
+                <span className="text-white font-bold text-xl">D</span>
+              </div>
+              <h1 className="ml-3 text-2xl font-bold text-gray-900">DringDring</h1>
+            </div>
+            <div className="text-sm text-gray-600">
+              Livraisons à domicile • Sion et région
+            </div>
+          </div>
         </div>
-        {me?.roles?.includes("shop") && (
-          <section className="mt-6 p-4 border rounded">
-            <h2 className="font-semibold mb-2">Aperçu (aujourd'hui / semaine / mois)</h2>
-            <button
-              className="px-3 py-2 border rounded"
-              onClick={async ()=>{
-                try{
-                  const sid = selectedShop || me?.shopId;
-                  if(!sid){ alert('Aucun shop sélectionné'); return; }
-                  const dash = await apiAuthGet<any>(`/shops/${sid}/dashboard`);
-                  alert(JSON.stringify(dash, null, 2));
-                }catch(e:any){ alert(e.message) }
-              }}
-            >
-              Charger les stats
-            </button>
-          </section>
-        )}
-    </main>
-    </AuthGate>
+      </header>
+
+      {/* Hero Section */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        <div className="text-center mb-16">
+          <h2 className="text-4xl font-bold text-gray-900 mb-4">
+            Livraisons à domicile
+          </h2>
+          <p className="text-xl text-gray-600 mb-8">
+            Service de livraison de courses pour les magasins partenaires de Sion
+          </p>
+          <div className="bg-green-100 border border-green-200 rounded-lg p-4 max-w-2xl mx-auto">
+            <p className="text-green-800 font-medium">
+              🚚 Livraisons écologiques • 💰 Tarifs attractifs • 🏪 Magasins locaux
+            </p>
+          </div>
+        </div>
+
+        {/* User Type Selection */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 mb-16">
+          {/* Client */}
+          <Link 
+            href="/client"
+            className="group"
+            onMouseEnter={() => handleMouseEnter('client')}
+            onMouseLeave={handleMouseLeave}
+          >
+            <div className={`bg-white rounded-xl shadow-lg p-8 text-center transition-all duration-300 ${
+              hoveredCard === 'client' 
+                ? 'transform scale-105 shadow-xl border-2 border-blue-500' 
+                : 'hover:shadow-xl border-2 border-transparent hover:border-blue-200'
+            }`}>
+              <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:bg-blue-200 transition-colors">
+                <svg className="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                </svg>
+              </div>
+              <h3 className="text-xl font-semibold text-gray-900 mb-2 group-hover:text-blue-600 transition-colors">
+                Je suis un client
+              </h3>
+              <p className="text-gray-600 text-sm mb-4">
+                Consultez vos livraisons et gérez votre profil
+              </p>
+              <div className="text-blue-600 font-medium group-hover:text-blue-700">
+                Accéder à mon espace →
+              </div>
+            </div>
+          </Link>
+
+          {/* Magasin */}
+          <Link 
+            href="/login/shop"
+            className="group"
+            onMouseEnter={() => handleMouseEnter('shop')}
+            onMouseLeave={handleMouseLeave}
+          >
+            <div className={`bg-white rounded-xl shadow-lg p-8 text-center transition-all duration-300 ${
+              hoveredCard === 'shop' 
+                ? 'transform scale-105 shadow-xl border-2 border-green-500' 
+                : 'hover:shadow-xl border-2 border-transparent hover:border-green-200'
+            }`}>
+              <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:bg-green-200 transition-colors">
+                <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                </svg>
+              </div>
+              <h3 className="text-xl font-semibold text-gray-900 mb-2 group-hover:text-green-600 transition-colors">
+                Je suis un magasin
+              </h3>
+              <p className="text-gray-600 text-sm mb-4">
+                Gérez vos livraisons et clients
+              </p>
+              <div className="text-green-600 font-medium group-hover:text-green-700">
+                Se connecter →
+              </div>
+            </div>
+          </Link>
+
+          {/* HQ Admin */}
+          <Link 
+            href="/login/hq-admin"
+            className="group"
+            onMouseEnter={() => handleMouseEnter('hq-admin')}
+            onMouseLeave={handleMouseLeave}
+          >
+            <div className={`bg-white rounded-xl shadow-lg p-8 text-center transition-all duration-300 ${
+              hoveredCard === 'hq-admin' 
+                ? 'transform scale-105 shadow-xl border-2 border-purple-500' 
+                : 'hover:shadow-xl border-2 border-transparent hover:border-purple-200'
+            }`}>
+              <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:bg-purple-200 transition-colors">
+                <svg className="w-8 h-8 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                </svg>
+              </div>
+              <h3 className="text-xl font-semibold text-gray-900 mb-2 group-hover:text-purple-600 transition-colors">
+                Je suis un HQ Admin
+              </h3>
+              <p className="text-gray-600 text-sm mb-4">
+                Gestion des magasins de mon enseigne
+              </p>
+              <div className="text-purple-600 font-medium group-hover:text-purple-700">
+                Se connecter →
+              </div>
+            </div>
+          </Link>
+
+          {/* Admin Régional */}
+          <Link 
+            href="/login/regional"
+            className="group"
+            onMouseEnter={() => handleMouseEnter('regional')}
+            onMouseLeave={handleMouseLeave}
+          >
+            <div className={`bg-white rounded-xl shadow-lg p-8 text-center transition-all duration-300 ${
+              hoveredCard === 'regional' 
+                ? 'transform scale-105 shadow-xl border-2 border-orange-500' 
+                : 'hover:shadow-xl border-2 border-transparent hover:border-orange-200'
+            }`}>
+              <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:bg-orange-200 transition-colors">
+                <svg className="w-8 h-8 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </div>
+              <h3 className="text-xl font-semibold text-gray-900 mb-2 group-hover:text-orange-600 transition-colors">
+                Je suis un admin régional
+              </h3>
+              <p className="text-gray-600 text-sm mb-4">
+                Gestion régionale et tarifs
+              </p>
+              <div className="text-orange-600 font-medium group-hover:text-orange-700">
+                Se connecter →
+              </div>
+            </div>
+          </Link>
+        </div>
+
+        {/* Features Section */}
+        <div className="bg-white rounded-xl shadow-lg p-8">
+          <h3 className="text-2xl font-bold text-gray-900 text-center mb-8">
+            Comment ça marche ?
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div className="text-center">
+              <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <span className="text-2xl">🛒</span>
+              </div>
+              <h4 className="font-semibold text-gray-900 mb-2">1. Faites vos courses</h4>
+              <p className="text-gray-600 text-sm">Dans un magasin partenaire de Sion</p>
+            </div>
+            <div className="text-center">
+              <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <span className="text-2xl">📱</span>
+              </div>
+              <h4 className="font-semibold text-gray-900 mb-2">2. Demandez la livraison</h4>
+              <p className="text-gray-600 text-sm">Le magasin organise la livraison via DringDring</p>
+            </div>
+            <div className="text-center">
+              <div className="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <span className="text-2xl">🚚</span>
+              </div>
+              <h4 className="font-semibold text-gray-900 mb-2">3. Recevez chez vous</h4>
+              <p className="text-gray-600 text-sm">Livraison écologique à domicile</p>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/* Footer */}
+      <footer className="bg-gray-800 text-white py-8 mt-16">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center">
+            <p className="text-gray-400">
+              © 2025 DringDring • Service de livraison à domicile • Sion, Suisse
+            </p>
+          </div>
+        </div>
+      </footer>
+    </div>
   );
 }

@@ -1,380 +1,265 @@
-# 🚀 Guide de déploiement DringDring
+# 🚀 Guide de Déploiement Complet - DringDring
 
-## 📋 Table des matières
-1. [Prérequis](#prérequis)
-2. [Déploiement local avec Docker](#déploiement-local)
-3. [Déploiement sur un serveur](#déploiement-serveur)
-4. [Déploiement sur le cloud](#déploiement-cloud)
-5. [Configuration de production](#configuration-production)
-6. [Monitoring et maintenance](#monitoring)
-
----
-
-## 🔧 Prérequis
-
-### **Sur votre ordinateur :**
-- **Docker Desktop** : [Télécharger ici](https://www.docker.com/products/docker-desktop)
-- **Git** : [Télécharger ici](https://git-scm.com/downloads)
-- **Un éditeur de code** : VS Code recommandé
-
-### **Comptes nécessaires :**
-- **Firebase** : [Console Firebase](https://console.firebase.google.com)
-- **Google Cloud** : [Console Google Cloud](https://console.cloud.google.com)
-- **Sentry** (optionnel) : [Sentry.io](https://sentry.io) pour le monitoring
+## 📋 Prérequis
+- ✅ Heroku CLI installé (`heroku --version`)
+- ✅ Git installé (`git --version`)
+- ✅ Compte Heroku créé
+- ✅ Compte Vercel créé (pour le frontend)
+- ✅ Compte Firebase créé (pour l'authentification)
 
 ---
 
-## 🐳 Déploiement local avec Docker
+## 🔧 PARTIE 1 : DÉPLOIEMENT BACKEND (Heroku)
 
-### **Étape 1 : Cloner le projet**
-```bash
-git clone https://github.com/votre-username/DringDring.git
-cd DringDring/backend
-```
-
-### **Étape 2 : Configuration**
-1. Copiez le fichier d'exemple :
-```bash
-cp env.production.example .env.production
-```
-
-2. Éditez `.env.production` avec vos vraies valeurs :
-```bash
-# Remplacez par vos vraies valeurs
-FIREBASE_PROJECT_ID=votre-projet-firebase
-FIREBASE_PRIVATE_KEY="votre-clé-privée"
-# ... etc
-```
-
-### **Étape 3 : Construire et démarrer**
-```bash
-# Construire l'image Docker
-docker build -t dringdring-backend .
-
-# Démarrer l'application
-docker-compose up -d
-```
-
-### **Étape 4 : Vérifier**
-- Ouvrez votre navigateur : http://localhost:8000
-- Documentation API : http://localhost:8000/docs
-
----
-
-## 🖥️ Déploiement sur un serveur
-
-### **Option A : Serveur VPS (DigitalOcean, Linode, etc.)**
-
-#### **1. Préparer le serveur**
-```bash
-# Se connecter au serveur
-ssh root@votre-serveur-ip
-
-# Mettre à jour le système
-apt update && apt upgrade -y
-
-# Installer Docker
-curl -fsSL https://get.docker.com -o get-docker.sh
-sh get-docker.sh
-
-# Installer Docker Compose
-curl -L "https://github.com/docker/compose/releases/download/v2.20.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-chmod +x /usr/local/bin/docker-compose
-```
-
-#### **2. Déployer l'application**
-```bash
-# Cloner le projet
-git clone https://github.com/votre-username/DringDring.git
-cd DringDring/backend
-
-# Configurer l'environnement
-cp env.production.example .env.production
-nano .env.production  # Éditer avec vos valeurs
-
-# Déployer
-docker-compose up -d
-```
-
-#### **3. Configurer un domaine (optionnel)**
-```bash
-# Installer Nginx
-apt install nginx -y
-
-# Configurer le reverse proxy
-nano /etc/nginx/sites-available/dringdring
-```
-
-Configuration Nginx :
-```nginx
-server {
-    listen 80;
-    server_name votre-domaine.com;
-
-    location / {
-        proxy_pass http://localhost:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
-
----
-
-## ☁️ Déploiement sur le cloud
-
-### **Option A : Heroku (Le plus simple)**
-
-#### **1. Installer Heroku CLI**
-- [Télécharger Heroku CLI](https://devcenter.heroku.com/articles/heroku-cli)
-
-#### **2. Préparer l'application**
-```bash
-# Créer un fichier Procfile
-echo "web: uvicorn app.main:app --host 0.0.0.0 --port \$PORT" > Procfile
-
-# Créer un runtime.txt
-echo "python-3.10.0" > runtime.txt
-```
-
-#### **3. Déployer**
-```bash
-# Se connecter à Heroku
+### Étape 1 : Connexion à Heroku
+```powershell
 heroku login
+```
+👉 Appuyez sur une touche pour ouvrir le navigateur et vous connecter
 
-# Créer l'application
-heroku create dringdring-app
+### Étape 2 : Créer l'application Heroku
+```powershell
+cd backend
+heroku create dringdring-backend
+```
+👉 Remplacez `dringdring-backend` par le nom que vous souhaitez (doit être unique)
 
-# Configurer les variables d'environnement
-heroku config:set FIREBASE_PROJECT_ID=votre-projet
-heroku config:set FIREBASE_PRIVATE_KEY="votre-clé"
-# ... etc
+### Étape 3 : Configurer les variables d'environnement
+```powershell
+# Variables Firebase (à récupérer depuis Firebase Console)
+heroku config:set FIREBASE_PROJECT_ID=votre-project-id
+heroku config:set FIREBASE_PRIVATE_KEY_ID=votre-private-key-id
+heroku config:set FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+heroku config:set FIREBASE_CLIENT_EMAIL=votre-client-email
+heroku config:set FIREBASE_CLIENT_ID=votre-client-id
+heroku config:set FIREBASE_AUTH_URI=https://accounts.google.com/o/oauth2/auth
+heroku config:set FIREBASE_TOKEN_URI=https://oauth2.googleapis.com/token
+heroku config:set FIREBASE_AUTH_PROVIDER_X509_CERT_URL=https://www.googleapis.com/oauth2/v1/certs
+heroku config:set FIREBASE_CLIENT_X509_CERT_URL=votre-cert-url
 
-# Déployer
+# URL de l'API (sera mise à jour après déploiement)
+heroku config:set API_URL=https://dringdring-backend.herokuapp.com
+
+# CORS (URL du frontend Vercel)
+heroku config:set CORS_ORIGIN=https://votre-frontend.vercel.app
+```
+
+### Étape 4 : Déployer le backend
+**Option A : Via Git (si le repo est déjà sur GitHub)**
+```powershell
+# Initialiser Git si ce n'est pas déjà fait
+git init
+git add .
+git commit -m "Initial commit for Heroku deployment"
+
+# Ajouter le remote Heroku
+heroku git:remote -a dringdring-backend
+
+# Pousser vers Heroku
 git push heroku main
 ```
 
-### **Option B : Google Cloud Run (Recommandé)**
+**Option B : Via GitHub Integration (RECOMMANDÉ)**
+1. Allez sur https://dashboard.heroku.com
+2. Sélectionnez votre app `dringdring-backend`
+3. Allez dans l'onglet **"Deploy"**
+4. Cliquez sur **"Connect to GitHub"**
+5. Autorisez Heroku à accéder à votre compte GitHub
+6. Sélectionnez votre repository `DringDring`
+7. Sélectionnez la branche `main` (ou `master`)
+8. Cliquez sur **"Enable Automatic Deploys"** (optionnel)
+9. Cliquez sur **"Deploy Branch"**
 
-#### **1. Installer Google Cloud CLI**
-- [Télécharger Google Cloud CLI](https://cloud.google.com/sdk/docs/install)
-
-#### **2. Configurer**
-```bash
-# Se connecter
-gcloud auth login
-
-# Configurer le projet
-gcloud config set project VOTRE-PROJET-ID
-
-# Activer les APIs
-gcloud services enable run.googleapis.com
-gcloud services enable cloudbuild.googleapis.com
+### Étape 5 : Vérifier le déploiement
+```powershell
+heroku logs --tail
 ```
+👉 Vérifiez qu'il n'y a pas d'erreurs
 
-#### **3. Déployer**
-```bash
-# Construire et déployer
-gcloud run deploy dringdring-backend \
-  --source . \
-  --platform managed \
-  --region europe-west1 \
-  --allow-unauthenticated
+### Étape 6 : Tester l'API
+```powershell
+heroku open
 ```
-
-### **Option C : AWS (Pour les gros projets)**
-
-#### **1. Installer AWS CLI**
-- [Télécharger AWS CLI](https://aws.amazon.com/cli/)
-
-#### **2. Utiliser AWS Elastic Beanstalk**
-```bash
-# Installer EB CLI
-pip install awsebcli
-
-# Initialiser
-eb init
-
-# Créer l'environnement
-eb create production
-
-# Déployer
-eb deploy
-```
+👉 Ou visitez : `https://dringdring-backend.herokuapp.com/docs`
 
 ---
 
-## 🔐 Configuration de production
+## 🎨 PARTIE 2 : DÉPLOIEMENT FRONTEND (Vercel)
 
-### **1. Sécurité**
-
-#### **Variables d'environnement sensibles**
-```bash
-# Générer des clés secrètes
-python -c "import secrets; print(secrets.token_urlsafe(32))"
-
-# Utiliser dans .env.production
-SECRET_KEY=votre-clé-secrète-générée
-JWT_SECRET_KEY=une-autre-clé-secrète
+### Étape 1 : Installer Vercel CLI (optionnel)
+```powershell
+npm install -g vercel
 ```
 
-#### **CORS (Cross-Origin Resource Sharing)**
-```python
-# Dans app/main.py
-from fastapi.middleware.cors import CORSMiddleware
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://votre-frontend.com"],  # Votre domaine frontend
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+### Étape 2 : Se connecter à Vercel
+```powershell
+cd frontend
+vercel login
 ```
 
-### **2. Base de données Firebase**
+### Étape 3 : Créer le fichier `.env.local`
+Créez `frontend/.env.local` avec :
+```env
+NEXT_PUBLIC_API_URL=https://dringdring-backend.herokuapp.com
+NEXT_PUBLIC_FIREBASE_API_KEY=votre-firebase-api-key
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=votre-project.firebaseapp.com
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=votre-project-id
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=votre-project.appspot.com
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=votre-sender-id
+NEXT_PUBLIC_FIREBASE_APP_ID=votre-app-id
+```
 
-#### **Créer un projet Firebase**
-1. Aller sur [Console Firebase](https://console.firebase.google.com)
-2. Créer un nouveau projet
-3. Activer Firestore Database
-4. Générer une clé de service
+### Étape 4 : Déployer sur Vercel
+**Option A : Via Vercel CLI**
+```powershell
+vercel
+```
+👉 Suivez les instructions interactives
 
-#### **Configurer les règles Firestore**
+**Option B : Via GitHub Integration (RECOMMANDÉ)**
+1. Allez sur https://vercel.com
+2. Cliquez sur **"Add New Project"**
+3. Importez votre repository GitHub `DringDring`
+4. Configurez :
+   - **Framework Preset** : Next.js
+   - **Root Directory** : `frontend`
+   - **Build Command** : `npm run build` (ou laissez par défaut)
+   - **Output Directory** : `.next` (ou laissez par défaut)
+5. Ajoutez les variables d'environnement (voir Étape 3)
+6. Cliquez sur **"Deploy"**
+
+### Étape 5 : Mettre à jour les variables d'environnement
+Après le déploiement, mettez à jour :
+- Dans Vercel : Variables d'environnement → Ajoutez `NEXT_PUBLIC_API_URL`
+- Dans Heroku : Mettez à jour `CORS_ORIGIN` avec l'URL Vercel
+
+---
+
+## 🔐 PARTIE 3 : CONFIGURATION FIREBASE
+
+### Étape 1 : Créer un projet Firebase
+1. Allez sur https://console.firebase.google.com
+2. Créez un nouveau projet (ou utilisez un existant)
+3. Activez **Authentication** → **Sign-in method** → Activez **Email/Password**
+
+### Étape 2 : Récupérer les clés de service
+1. Allez dans **Project Settings** → **Service Accounts**
+2. Cliquez sur **"Generate New Private Key"**
+3. Téléchargez le fichier JSON
+4. Utilisez ces valeurs pour configurer Heroku (voir Partie 1, Étape 3)
+
+### Étape 3 : Configurer Firestore
+1. Allez dans **Firestore Database**
+2. Créez une base de données en mode **Production**
+3. Configurez les règles de sécurité :
 ```javascript
-// Dans Firebase Console > Firestore > Rules
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Règles de sécurité pour DringDring
-    match /shops/{shopId} {
-      allow read, write: if request.auth != null && 
-        (request.auth.token.role == 'admin' || 
-         request.auth.token.shop_id == shopId);
-    }
-    
-    match /deliveries/{deliveryId} {
+    // Règles à adapter selon vos besoins
+    match /{document=**} {
       allow read, write: if request.auth != null;
     }
   }
 }
 ```
 
-### **3. Monitoring avec Sentry**
-
-#### **Configurer Sentry**
-1. Créer un compte sur [Sentry.io](https://sentry.io)
-2. Créer un nouveau projet Python
-3. Récupérer le DSN
-
-```python
-# Dans app/main.py (déjà configuré)
-import sentry_sdk
-from sentry_sdk.integrations.fastapi import FastApiIntegration
-
-sentry_sdk.init(
-    dsn="VOTRE-SENTRY-DSN",
-    integrations=[FastApiIntegration()],
-    traces_sample_rate=0.1,
-    environment="production"
-)
-```
-
 ---
 
-## 📊 Monitoring et maintenance
+## ✅ PARTIE 4 : VÉRIFICATIONS POST-DÉPLOIEMENT
 
-### **1. Logs**
-```bash
-# Voir les logs en temps réel
-docker-compose logs -f
-
-# Voir les logs d'un service spécifique
-docker-compose logs -f backend
-```
-
-### **2. Sauvegarde**
-```bash
-# Sauvegarder la base de données Firebase
-# (Firebase fait des sauvegardes automatiques)
-
-# Sauvegarder les fichiers de configuration
-tar -czf backup-$(date +%Y%m%d).tar.gz .env.production credentials/
-```
-
-### **3. Mise à jour**
-```bash
-# Arrêter l'application
-docker-compose down
-
-# Mettre à jour le code
-git pull origin main
-
-# Reconstruire et redémarrer
-docker-compose up -d --build
-```
-
-### **4. Surveillance**
-- **Sentry** : Erreurs et performances
-- **Firebase Console** : Utilisation de la base de données
-- **Google Cloud Monitoring** : Métriques serveur
-
----
-
-## 🆘 Dépannage
-
-### **Problèmes courants**
-
-#### **L'application ne démarre pas**
-```bash
+### Backend (Heroku)
+```powershell
 # Vérifier les logs
-docker-compose logs
+heroku logs --tail
 
 # Vérifier les variables d'environnement
-docker-compose config
+heroku config
+
+# Tester l'API
+curl https://dringdring-backend.herokuapp.com/test/health
 ```
 
-#### **Erreur de connexion Firebase**
-- Vérifier que les clés Firebase sont correctes
-- Vérifier que le projet Firebase existe
-- Vérifier les permissions du compte de service
+### Frontend (Vercel)
+1. Visitez votre URL Vercel (ex: `https://dringdring.vercel.app`)
+2. Testez la connexion
+3. Vérifiez que les appels API fonctionnent (Onglet Réseau du navigateur)
 
-#### **Erreur CORS**
-- Vérifier la configuration CORS dans `app/main.py`
-- Vérifier que le domaine frontend est autorisé
+---
 
-### **Commandes utiles**
-```bash
-# Redémarrer l'application
-docker-compose restart
+## 🔄 PARTIE 5 : MISE À JOUR CONTINUE
 
-# Voir l'état des conteneurs
-docker-compose ps
+### Backend
+Si vous utilisez GitHub Integration :
+- Poussez vos changements sur GitHub
+- Heroku déploiera automatiquement (si activé)
 
-# Entrer dans le conteneur
-docker-compose exec backend bash
+Sinon :
+```powershell
+git push heroku main
+```
 
-# Nettoyer les images inutilisées
-docker system prune -a
+### Frontend
+Si vous utilisez GitHub Integration :
+- Poussez vos changements sur GitHub
+- Vercel déploiera automatiquement
+
+Sinon :
+```powershell
+vercel --prod
 ```
 
 ---
 
-## 🎉 Félicitations !
+## 🐛 DÉPANNAGE
 
-Votre application DringDring est maintenant en production ! 
+### Erreur : "Application Error" sur Heroku
+```powershell
+# Vérifier les logs
+heroku logs --tail
 
-### **Prochaines étapes :**
-1. **Tester** : Vérifier que tout fonctionne
-2. **Configurer le frontend** : Connecter votre interface utilisateur
-3. **Former les utilisateurs** : Utiliser le système d'onboarding
-4. **Monitorer** : Surveiller les performances et erreurs
+# Vérifier que le Procfile est correct
+cat Procfile
 
-### **Support :**
-- 📚 Documentation : http://votre-domaine.com/docs
-- 🐛 Bugs : Créer une issue sur GitHub
-- 💬 Questions : Utiliser le système d'aide intégré
+# Vérifier que requirements.txt est à jour
+pip freeze > requirements.txt
+```
 
-**Bon déploiement ! 🚀**
+### Erreur : CORS sur le frontend
+- Vérifiez que `CORS_ORIGIN` dans Heroku correspond à l'URL Vercel
+- Vérifiez que `NEXT_PUBLIC_API_URL` dans Vercel correspond à l'URL Heroku
 
+### Erreur : Variables d'environnement manquantes
+```powershell
+# Backend
+heroku config
 
+# Frontend (dans Vercel Dashboard)
+# Vérifiez dans Settings → Environment Variables
+```
+
+---
+
+## 📝 RÉSUMÉ DES URLS
+
+Après déploiement, vous aurez :
+- **Backend API** : `https://dringdring-backend.herokuapp.com`
+- **Frontend** : `https://dringdring.vercel.app` (ou votre nom personnalisé)
+- **API Docs** : `https://dringdring-backend.herokuapp.com/docs`
+
+---
+
+## 🎯 PROCHAINES ÉTAPES
+
+1. ✅ Déployer le backend sur Heroku
+2. ✅ Déployer le frontend sur Vercel
+3. ✅ Configurer Firebase
+4. ✅ Tester toutes les fonctionnalités
+5. ✅ Configurer un domaine personnalisé (optionnel)
+
+---
+
+**Besoin d'aide ?** Consultez :
+- [Documentation Heroku](https://devcenter.heroku.com/)
+- [Documentation Vercel](https://vercel.com/docs)
+- [Documentation Firebase](https://firebase.google.com/docs)

@@ -1,0 +1,390 @@
+"use client";
+import { useEffect, useState } from "react";
+import HQAdminLayout from "@/components/HQAdminLayout";
+import LoadingSpinner from "@/components/LoadingSpinner";
+import { apiAuthGet } from "@/lib/api";
+
+type HQUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: 'shop_manager' | 'shop_employee' | 'hq_admin';
+  shopName?: string;
+  region: string;
+  status: 'active' | 'inactive' | 'pending';
+  lastLogin: string;
+  createdAt: string;
+  permissions: string[];
+};
+
+export default function HQAdminUsersPage() {
+  const [users, setUsers] = useState<HQUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<'all' | 'active' | 'inactive' | 'pending'>('all');
+  const [roleFilter, setRoleFilter] = useState<'all' | 'shop_manager' | 'shop_employee' | 'hq_admin'>('all');
+
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        setLoading(true);
+        const data = await apiAuthGet<HQUser[]>("/test/hq-admin/users");
+        setUsers(data);
+      } catch (err: any) {
+        console.error("Error fetching HQ users:", err);
+        setError(err.message || "Une erreur est survenue lors du chargement des utilisateurs.");
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchUsers();
+  }, []);
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('fr-CH', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const getStatusColor = (status: HQUser['status']) => {
+    switch (status) {
+      case 'active':
+        return 'bg-green-100 text-green-800';
+      case 'inactive':
+        return 'bg-red-100 text-red-800';
+      case 'pending':
+        return 'bg-yellow-100 text-yellow-800';
+      default:
+        return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const getStatusText = (status: HQUser['status']) => {
+    switch (status) {
+      case 'active':
+        return 'Actif';
+      case 'inactive':
+        return 'Inactif';
+      case 'pending':
+        return 'En attente';
+      default:
+        return status;
+    }
+  };
+
+  const getRoleText = (role: HQUser['role']) => {
+    switch (role) {
+      case 'shop_manager':
+        return 'Gérant de magasin';
+      case 'shop_employee':
+        return 'Employé de magasin';
+      case 'hq_admin':
+        return 'HQ Admin';
+      default:
+        return role;
+    }
+  };
+
+  const getRoleColor = (role: HQUser['role']) => {
+    switch (role) {
+      case 'shop_manager':
+        return 'bg-blue-100 text-blue-800';
+      case 'shop_employee':
+        return 'bg-gray-100 text-gray-800';
+      case 'hq_admin':
+        return 'bg-purple-100 text-purple-800';
+      default:
+        return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const filteredUsers = users.filter(user => {
+    const statusMatch = filter === 'all' || user.status === filter;
+    const roleMatch = roleFilter === 'all' || user.role === roleFilter;
+    return statusMatch && roleMatch;
+  });
+
+  if (loading) {
+    return (
+      <HQAdminLayout>
+        <LoadingSpinner text="Chargement des utilisateurs..." />
+      </HQAdminLayout>
+    );
+  }
+
+  if (error) {
+    return (
+      <HQAdminLayout>
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
+          <p>{error}</p>
+        </div>
+      </HQAdminLayout>
+    );
+  }
+
+  return (
+    <HQAdminLayout>
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex justify-between items-center">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Utilisateurs</h1>
+            <p className="mt-2 text-gray-600">
+              Gestion des utilisateurs de vos magasins
+            </p>
+          </div>
+          <button className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-md text-sm font-medium">
+            + Ajouter un utilisateur
+          </button>
+        </div>
+
+        {/* Stats */}
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-4">
+          <div className="bg-white overflow-hidden shadow rounded-lg">
+            <div className="p-5">
+              <div className="flex items-center">
+                <div className="flex-shrink-0">
+                  <span className="text-2xl">👥</span>
+                </div>
+                <div className="ml-5 w-0 flex-1">
+                  <dl>
+                    <dt className="text-sm font-medium text-gray-500 truncate">
+                      Total Utilisateurs
+                    </dt>
+                    <dd className="text-lg font-medium text-gray-900">
+                      {users.length}
+                    </dd>
+                  </dl>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white overflow-hidden shadow rounded-lg">
+            <div className="p-5">
+              <div className="flex items-center">
+                <div className="flex-shrink-0">
+                  <span className="text-2xl">✅</span>
+                </div>
+                <div className="ml-5 w-0 flex-1">
+                  <dl>
+                    <dt className="text-sm font-medium text-gray-500 truncate">
+                      Actifs
+                    </dt>
+                    <dd className="text-lg font-medium text-gray-900">
+                      {users.filter(u => u.status === 'active').length}
+                    </dd>
+                  </dl>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white overflow-hidden shadow rounded-lg">
+            <div className="p-5">
+              <div className="flex items-center">
+                <div className="flex-shrink-0">
+                  <span className="text-2xl">⏳</span>
+                </div>
+                <div className="ml-5 w-0 flex-1">
+                  <dl>
+                    <dt className="text-sm font-medium text-gray-500 truncate">
+                      En attente
+                    </dt>
+                    <dd className="text-lg font-medium text-gray-900">
+                      {users.filter(u => u.status === 'pending').length}
+                    </dd>
+                  </dl>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white overflow-hidden shadow rounded-lg">
+            <div className="p-5">
+              <div className="flex items-center">
+                <div className="flex-shrink-0">
+                  <span className="text-2xl">👨‍💼</span>
+                </div>
+                <div className="ml-5 w-0 flex-1">
+                  <dl>
+                    <dt className="text-sm font-medium text-gray-500 truncate">
+                      Gérants
+                    </dt>
+                    <dd className="text-lg font-medium text-gray-900">
+                      {users.filter(u => u.role === 'shop_manager').length}
+                    </dd>
+                  </dl>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-4 py-5 sm:p-6">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {/* Status Filters */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Filtre par statut
+                </label>
+                <div className="flex space-x-2">
+                  {[
+                    { key: 'all', label: 'Tous' },
+                    { key: 'active', label: 'Actifs' },
+                    { key: 'inactive', label: 'Inactifs' },
+                    { key: 'pending', label: 'En attente' }
+                  ].map(({ key, label }) => (
+                    <button
+                      key={key}
+                      onClick={() => setFilter(key as any)}
+                      className={`px-3 py-1 rounded-md text-sm font-medium ${
+                        filter === key
+                          ? 'bg-purple-100 text-purple-700'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Role Filters */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Filtre par rôle
+                </label>
+                <div className="flex space-x-2">
+                  {[
+                    { key: 'all', label: 'Tous' },
+                    { key: 'shop_manager', label: 'Gérants' },
+                    { key: 'shop_employee', label: 'Employés' },
+                    { key: 'hq_admin', label: 'HQ Admin' }
+                  ].map(({ key, label }) => (
+                    <button
+                      key={key}
+                      onClick={() => setRoleFilter(key as any)}
+                      className={`px-3 py-1 rounded-md text-sm font-medium ${
+                        roleFilter === key
+                          ? 'bg-purple-100 text-purple-700'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Users List */}
+        <div className="bg-white shadow rounded-lg overflow-hidden">
+          <div className="px-4 py-5 sm:p-6">
+            <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">
+              Liste des Utilisateurs ({filteredUsers.length})
+            </h3>
+            {filteredUsers.length === 0 ? (
+              <p className="text-gray-500 text-center py-4">
+                Aucun utilisateur trouvé pour ces filtres.
+              </p>
+            ) : (
+              <div className="overflow-hidden">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Utilisateur
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Rôle
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Magasin
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Région
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Statut
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Dernière connexion
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {filteredUsers.map((user) => (
+                      <tr key={user.id} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center">
+                            <div className="flex-shrink-0 h-10 w-10">
+                              <div className="h-10 w-10 rounded-full bg-purple-100 flex items-center justify-center">
+                                <span className="text-sm font-medium text-purple-600">
+                                  {user.name.charAt(0).toUpperCase()}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="ml-4">
+                              <div className="text-sm font-medium text-gray-900">
+                                {user.name}
+                              </div>
+                              <div className="text-sm text-gray-500">
+                                {user.email}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getRoleColor(user.role)}`}>
+                            {getRoleText(user.role)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {user.shopName || '-'}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {user.region}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(user.status)}`}>
+                            {getStatusText(user.status)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {formatDate(user.lastLogin)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                          <button className="text-purple-600 hover:text-purple-900 mr-3">
+                            Modifier
+                          </button>
+                          <button className="text-gray-600 hover:text-gray-900">
+                            Détails
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </HQAdminLayout>
+  );
+}
+
+
+

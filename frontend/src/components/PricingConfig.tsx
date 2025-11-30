@@ -101,8 +101,9 @@ export default function PricingConfig({ initialConfig, onSave, disabled = false 
       }
 
       await onSave(config);
-    } catch (e: any) {
-      setError(e?.message || "Erreur de sauvegarde");
+    } catch (e: unknown) {
+      const error = e as { message?: string };
+      setError(error?.message || "Erreur de sauvegarde");
     } finally {
       setBusy(false);
     }

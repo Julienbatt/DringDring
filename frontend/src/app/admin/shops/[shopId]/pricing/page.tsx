@@ -1,42 +1,54 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import AuthGate from "@/components/AuthGate";
 import PricingConfig, { PricingConfig as PricingConfigType } from "@/components/PricingConfig";
 import { getShop, updateShop } from "@/lib/api";
 import { showToast } from "@/lib/toast";
 
+type ShopWithPricing = {
+  id: string;
+  name: string;
+  pricing?: PricingConfigType;
+  [key: string]: unknown;
+};
+
 export default function ShopPricingPage() {
   const params = useParams();
   const shopId = params.shopId as string;
   
-  const [shop, setShop] = useState<any>(null);
+  const [shop, setShop] = useState<ShopWithPricing | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>("");
 
-  useEffect(() => {
-    loadShop();
-  }, [shopId]);
-
-  const loadShop = async () => {
+  const loadShop = useCallback(async () => {
     try {
       setLoading(true);
-      const shopData = await getShop(shopId);
+      const shopData = await getShop(shopId) as ShopWithPricing;
       setShop(shopData);
-    } catch (e: any) {
-      setError(e?.message || "Erreur de chargement");
+    } catch (e: unknown) {
+      const error = e as { message?: string };
+      setError(error?.message || "Erreur de chargement");
     } finally {
       setLoading(false);
     }
-  };
+  }, [shopId]);
+
+  useEffect(() => {
+    loadShop();
+  }, [loadShop]);
 
   const handleSavePricing = async (pricing: PricingConfigType) => {
     try {
       await updateShop(shopId, { pricing });
-      setShop(prev => ({ ...prev, pricing }));
+      setShop((prev: ShopWithPricing | null) => {
+        if (!prev) return null;
+        return { ...prev, pricing };
+      });
       showToast("Configuration de tarification sauvegardée", "success");
-    } catch (e: any) {
-      throw new Error(e?.message || "Erreur de sauvegarde");
+    } catch (e: unknown) {
+      const error = e as { message?: string };
+      throw new Error(error?.message || "Erreur de sauvegarde");
     }
   };
 
@@ -96,8 +108,8 @@ export default function ShopPricingPage() {
           <h3 className="font-medium mb-2">Comment ça fonctionne</h3>
           <ul className="text-sm text-gray-600 space-y-1">
             <li>• Les frais sont calculés automatiquement à chaque création/modification de livraison</li>
-            <li>• Le mode "sacs" facture par blocs (ex: 15 CHF par 2 sacs)</li>
-            <li>• Le mode "montant" facture selon le panier (ex: 15 CHF si ≤ 80 CHF, sinon 25 CHF)</li>
+            <li>• Le mode &quot;sacs&quot; facture par blocs (ex: 15 CHF par 2 sacs)</li>
+            <li>• Le mode &quot;montant&quot; facture selon le panier (ex: 15 CHF si ≤ 80 CHF, sinon 25 CHF)</li>
             <li>• Les clients CMS bénéficient de tarifs réduits si configurés</li>
             <li>• La répartition détermine qui encaisse quoi (magasin/autorités/chaîne)</li>
           </ul>
