@@ -128,8 +128,8 @@ export default function HQAdminReportsPage() {
       return acc;
     }, {} as Record<string, { deliveries: number; revenue: number }>);
 
-    const deliveriesByRegion = Object.entries(regionStats)
-      .map(([region, data]) => ({ region, ...data }))
+    const deliveriesByRegion = (Object.entries(regionStats) as [string, { deliveries: number; revenue: number }][])
+      .map(([region, data]) => ({ region, deliveries: data.deliveries, revenue: data.revenue }))
       .sort((a, b) => b.revenue - a.revenue);
 
     return {
