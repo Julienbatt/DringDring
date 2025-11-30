@@ -73,18 +73,20 @@ export default function NewClientPage() {
   const handleInputChange = (field: string, value: string | boolean) => {
     if (field.includes('.')) {
       const [parent, child] = field.split('.');
-      setFormData(prev => ({
-        ...prev,
-        [parent]: {
-          ...prev[parent as keyof typeof prev],
-          [child]: value
-        }
-      }));
+      if (parent === 'address') {
+        setFormData(prev => ({
+          ...prev,
+          address: {
+            ...prev.address,
+            [child]: value as string
+          }
+        }));
+      }
     } else {
       setFormData(prev => ({
         ...prev,
         [field]: value
-      }));
+      } as ClientData));
     }
   };
 

@@ -24,7 +24,7 @@ type Me = {
 
 export default function ShopDashboardPage() {
   const [me, setMe] = useState<Me | null>(null);
-  const [shops, setShops] = useState<Shop[]>([]);
+  const [shops, setShops] = useState<{id: string; name: string}[]>([]);
   const [shopId, setShopId] = useState<string>("");
   const [dash, setDash] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(false);
