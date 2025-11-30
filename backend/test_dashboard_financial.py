@@ -1,3 +1,3 @@
 # Legacy placeholder for worktree consistency.
-def test_pricing_placeholder():
+def test_dashboard_financial_placeholder():
     assert True
