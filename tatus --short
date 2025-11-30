@@ -1,0 +1,58 @@
+warning: in the working copy of 'frontend/src/lib/api.ts', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/frontend/src/lib/api.ts b/frontend/src/lib/api.ts[m
+[1mindex 1dbfeb1..e0e43ce 100644[m
+[1m--- a/frontend/src/lib/api.ts[m
+[1m+++ b/frontend/src/lib/api.ts[m
+[36m@@ -129,12 +129,29 @@[m [mexport async function downloadShopCsv(shopId: string) {[m
+   URL.revokeObjectURL(url);[m
+ }[m
+ [m
+[31m-export async function createShop(body: any): Promise<{ id: string }> {[m
+[32m+[m[32mexport type ShopUpdate = {[m
+[32m+[m[32m  pricing?: unknown;[m
+[32m+[m[32m  name?: string;[m
+[32m+[m[32m  address?: string;[m
+[32m+[m[32m  phone?: string;[m
+[32m+[m[32m  [key: string]: unknown;[m
+[32m+[m[32m};[m
+[32m+[m
+[32m+[m[32mexport type ShopFull = Shop & ShopUpdate;[m
+[32m+[m
+[32m+[m[32mexport type HqDashboard = {[m
+[32m+[m[32m  shops: number;[m
+[32m+[m[32m  deliveries: number;[m
+[32m+[m[32m  revenue: number;[m
+[32m+[m[32m  [key: string]: unknown;[m
+[32m+[m[32m};[m
+[32m+[m
+[32m+[m[32mexport async function createShop(body: Record<string, unknown>): Promise<{ id: string }> {[m
+   return apiAuthPost<{ id: string }>(`/shops`, body);[m
+ }[m
+ [m
+[31m-export async function getHqDashboard(chainId: string, regionId: string): Promise<any> {[m
+[31m-  return apiAuthGet(`/shops/chains/${chainId}/regions/${regionId}/dashboard`);[m
+[32m+[m[32mexport async function getHqDashboard(chainId: string, regionId: string): Promise<HqDashboard> {[m
+[32m+[m[32m  return apiAuthGet<HqDashboard>(`/shops/chains/${chainId}/regions/${regionId}/dashboard`);[m
+ }[m
+ [m
+ export async function exportHqToSheets(chainId: string, regionId: string, spreadsheetId: string, sheetName = 'Livraisons'): Promise<{ ok: boolean; rows: number }>{[m
+[36m@@ -148,13 +165,13 @@[m [mexport async function listChains(regionId?: string): Promise<string[]> {[m
+ }[m
+ [m
+ export async function listShopsSimple(): Promise<{id:string; name?:string}[]> {[m
+[31m-  return apiAuthGet(`/shops`);[m
+[32m+[m[32m  return apiAuthGet<{id:string; name?:string}[]>(`/shops`);[m
+ }[m
+ [m
+[31m-export async function getShop(shopId: string): Promise<any> {[m
+[31m-  return apiAuthGet(`/shops/${shopId}`);[m
+[32m+[m[32mexport async function getShop(shopId: string): Promise<ShopFull> {[m
+[32m+[m[32m  return apiAuthGet<ShopFull>(`/shops/${shopId}`);[m
+ }[m
+ [m
+[31m-export async function updateShop(shopId: string, updates: any): Promise<any> {[m
+[31m-  return apiAuthPatch(`/shops/${shopId}`, updates);[m
+[32m+[m[32mexport async function updateShop(shopId: string, updates: ShopUpdate): Promise<ShopFull> {[m
+[32m+[m[32m  return apiAuthPatch<ShopFull>(`/shops/${shopId}`, updates);[m
+ }[m
+\ No newline at end of file[m

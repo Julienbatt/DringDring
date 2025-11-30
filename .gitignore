@@ -1,0 +1,75 @@
+# Secrets et fichiers sensibles
+*.env
+*.env.local
+*.env.production
+.env*
+
+# Clés privées
+*private-key*
+*private_key*
+*-key.json
+firebase-admin-key.json
+*.pem
+*.key
+
+# Docker Compose avec secrets
+docker-compose.yml
+docker-compose.*.yml
+!docker-compose.example.yml
+
+# Fichiers de configuration avec secrets
+**/config/secrets.*
+**/secrets.*
+
+# Documentation avec secrets (mais autoriser les fichiers de documentation)
+*SECRET*
+*PRIVATE*
+*PASSWORD*
+# Exclure les fichiers de clés, mais autoriser la documentation
+*-key.json
+*private-key*
+*private_key*
+# Autoriser explicitement les fichiers de documentation
+!*_GUIDE.md
+!*_COMPLETE.md
+!*_FIX*.md
+
+# Fichiers de déploiement avec secrets
+deploy.*.sh
+deploy.*.ps1
+
+# Backend
+backend/.env
+backend/.env.*
+backend/firebase-admin-key.json
+backend/*.key
+backend/*.pem
+
+# Frontend
+frontend/.env
+frontend/.env.*
+frontend/.env.local
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Build
+dist/
+build/
+*.pyc
+__pycache__/
+.pytest_cache/
+
+

@@ -105,13 +105,77 @@ export async function exportShopToSheets(shopId: string): Promise<{ ok: boolean;
   return apiAuthPost<{ ok: boolean; rows: number }>(`/shops/${shopId}/sheets/export`, {});
 }
 
+// Address type matching backend schema
+export type Address = {
+  street: string;
+  streetNumber: string;
+  zip: string; // Swiss NPA (4 digits)
+  city: string;
+};
+
+// Contact type matching backend schema
+export type Contact = {
+  name: string;
+  email?: string;
+  phone?: string;
+};
+
+// ShopPricing types matching backend schema
+export type PricingSplit = {
+  shopPercent: number;
+  authorityPercent: number;
+  chainPercent: number;
+};
+
+export type PricingBagsConfig = {
+  bagsPerStep: number;
+  pricePerStep: number;
+  cmsPricePerStep?: number;
+};
+
+export type PricingAmountConfig = {
+  threshold: number;
+  priceBelowOrEqual: number;
+  priceAbove: number;
+  cmsPriceBelowOrEqual?: number;
+  cmsPriceAbove?: number;
+};
+
+export type ShopPricing = {
+  mode: "bags" | "amount";
+  bags?: PricingBagsConfig;
+  amount?: PricingAmountConfig;
+  split: PricingSplit;
+};
+
+// Full Shop type matching backend Shop schema
 export type Shop = {
+  id: string;
+  name: string;
+  address: Address;
+  email: string;
+  phone: string;
+  contacts: Contact[];
+  departments: string[];
+  spreadsheetId?: string;
+  sheetName?: string;
+  regionId?: string;
+  chainId?: string;
+  chainName?: string;
+  shopType?: "store" | "hq";
+  parentShopId?: string;
+  pricing?: ShopPricing;
+  updatedAt?: string;
+};
+
+// Shop summary type for list endpoints (only id and name)
+export type ShopSummary = {
   id: string;
   name: string;
 };
 
-export async function listShops(): Promise<Shop[]> {
-  return apiAuthGet<Shop[]>(`/shops`);
+export async function listShops(): Promise<ShopSummary[]> {
+  return apiAuthGet<ShopSummary[]>(`/shops`);
 }
 
 export async function downloadShopCsv(shopId: string) {
@@ -129,12 +193,56 @@ export async function downloadShopCsv(shopId: string) {
   URL.revokeObjectURL(url);
 }
 
-export async function createShop(body: any): Promise<{ id: string }> {
+// ShopUpdate type for partial updates
+export type ShopUpdate = {
+  name?: string;
+  address?: Address;
+  email?: string;
+  phone?: string;
+  contacts?: Contact[];
+  departments?: string[];
+  spreadsheetId?: string;
+  sheetName?: string;
+  pricing?: ShopPricing;
+  [key: string]: unknown;
+};
+
+// ShopFull is just an alias for Shop (the full shop object)
+export type ShopFull = Shop;
+
+// Period totals structure matching backend dashboard response
+export type PeriodTotals = {
+  deliveries: number;
+  totalBags: number;
+  totalAmount: number;
+  totalFees: number;
+  shopFees: number;
+  authorityFees: number;
+  chainFees: number;
+};
+
+// Top item structure
+export type TopItem = {
+  name: string;
+  deliveries: number;
+};
+
+// HqDashboard type matching backend /chains/{chain_id}/regions/{region_id}/dashboard response
+export type HqDashboard = {
+  today: PeriodTotals;
+  week: PeriodTotals;
+  month: PeriodTotals;
+  topEmployees: TopItem[];
+  topSectors: TopItem[];
+  lastUpdated: string;
+};
+
+export async function createShop(body: Record<string, unknown>): Promise<{ id: string }> {
   return apiAuthPost<{ id: string }>(`/shops`, body);
 }
 
-export async function getHqDashboard(chainId: string, regionId: string): Promise<any> {
-  return apiAuthGet(`/shops/chains/${chainId}/regions/${regionId}/dashboard`);
+export async function getHqDashboard(chainId: string, regionId: string): Promise<HqDashboard> {
+  return apiAuthGet<HqDashboard>(`/shops/chains/${chainId}/regions/${regionId}/dashboard`);
 }
 
 export async function exportHqToSheets(chainId: string, regionId: string, spreadsheetId: string, sheetName = 'Livraisons'): Promise<{ ok: boolean; rows: number }>{
@@ -148,13 +256,13 @@ export async function listChains(regionId?: string): Promise<string[]> {
 }
 
 export async function listShopsSimple(): Promise<{id:string; name?:string}[]> {
-  return apiAuthGet(`/shops`);
+  return apiAuthGet<{id:string; name?:string}[]>(`/shops`);
 }
 
-export async function getShop(shopId: string): Promise<any> {
-  return apiAuthGet(`/shops/${shopId}`);
+export async function getShop(shopId: string): Promise<Shop> {
+  return apiAuthGet<Shop>(`/shops/${shopId}`);
 }
 
-export async function updateShop(shopId: string, updates: any): Promise<any> {
-  return apiAuthPatch(`/shops/${shopId}`, updates);
+export async function updateShop(shopId: string, updates: ShopUpdate): Promise<Shop> {
+  return apiAuthPatch<Shop>(`/shops/${shopId}`, updates);
 }

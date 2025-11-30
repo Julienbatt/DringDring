@@ -10,13 +10,15 @@ services:
       - PYTHONPATH=/app
       - ENVIRONMENT=development
       # Firebase Configuration
-      - FIREBASE_PROJECT_ID=dringdring-11a84
-      - FIREBASE_PRIVATE_KEY_ID=2def90ea931318524b66c72cae35155bb0446fd0
-      - FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQDMJ5k/olVDgI5i\nQjvqDeCkTLSu3s+kn1I34AniD8ZrQODTTe3FeEuwQX3LoGcfDkkZ4ZN8pow/XG8c\n10pO+uPILyMUoDftj+GgHa1/zdV5U41GJ9qcJcUo58M74ErXbAggDoVX9caJ4pmC\nLb+dHzsIUNw++oeWIEnKeKFBGoP17U5avkRs/TRxORa2GHyZcNDoHETPFmTsH5/7\na6wRO9NBpteGPRlLcrjD5JuUMG44j67ZrUfITJT+PfdOg4b6ehbv+WrW3wvMWrwz\nOULQXZSA/25dTKV0az+DTxwhb2wYPheDu4oJMndJFY8zC87BbzexM0djiBMdT+UN\nR8CPtTRfAgMBAAECggEAGTMcGfw2LRZdvOgzEBF1dKJZPSqYk9fspKP9ZE+RLOT9\nu2dnnZPbN97lobBjejRftpefBmhicGG+/17dt8EFQ8z5tg6OyL6VWZfANkHYg1ja\nW9oIhHSvEP0GnsnxQwT9PcO9Ft3qC1QSobx25fSYa07b2NRAzzmeEiVwtiIJPt46\n2xc0skW4sxX4h9gkGLYL/JkBcXLAzOBCwNKzGuAsCnXYZayXDkbAJmvdUatEgNyy\n+XthwfhSgPuQVRMnC4E0BoSYP1YC54eGMWp2qlfpzih5peDh0ts9jL690b/VZxaO\nPq59ZD5ywXRHOkLJ1N4GJ0PWCEikmDr5VXpmaBn9xQKBgQDz1aW9JxMEyOq6F8Ah\nko3kxCAik49BYVrSx7M5+knNLpWvlCy7ePHd08Ak7bYnrm6TG1BnvhY123AUKMnj\nqsg8RksaCTxwCrCgHguwabVndyvAc0b0MeNkFSxEoc7RPu+7FmZJlJKxP/2mHiss\nr/YRNndh1lqksvFLzoSbZLDWvQKBgQDWVyTYbgtiN8ygIA520RVwXl83R09OuAlP\nnMVP4MI9sCU1ULu0zjCWa0rPjv5cPp2b1zmpVCaQtyyX+9unTz5sr6RzE/nZRmPR\nJaEDho23F3UYgJvMc7jpTrPTYoYo7QXZgA9b/vgxQU+2Xh8dd30S4aWf1OXBzn7D\nw1XsPKWnSwKBgQCV3jYNaavV4Avtr1VnDSXreuRpfBqry8PAFABD3WNpGn3kOgW4\ngKDggBr0V6sC/sJ15m7oJLyQA70ClwNnzHtgGLBmY1DjaJ6g+3ahyoc1/dhFZFUz\nGEq0JBNeZ7mvgKhmbGEYTppPGY60gIx23fw3HiwIVXDHFDkdJ+T3gc7zXQKBgQC/\nCosXsPXKhCuJaSkbM/6k2iiJz7BbXGNIJ1YifRUEALUZUS0M2V6rI1RZrXz/YPv/\nhBSr3QpGoE1J5b0A4fukyeSMgXiG9VtQdfaOeuZjE7BVt4Ol9lsQ8AoN1dn4LlKx\napfGCnrTBAB1bmzTScYcBy0lSY/DbzbDa55w4hlQAwKBgQClHr6WAhtxWi3vmR7O\nq+zchuL8RH55eYD4L6dxpCebCU/1Uce8NEuehHr+6cIJ8eGk6ltx+H6txuZsWEeD\ntgaNLkIYEe0dHVqcylUM253eSTF9LC6VBWJDjimjs82u4p6geJWQCvdaGNX6XX6D\npgXlLifcHeTO29Lr1A8sF2Kdnw==\n-----END PRIVATE KEY-----\n"
-      - FIREBASE_CLIENT_EMAIL=firebase-adminsdk-fbsvc@dringdring-11a84.iam.gserviceaccount.com
-      - FIREBASE_CLIENT_ID=106222191146330144676
-      - FIREBASE_AUTH_URI=https://accounts.google.com/o/oauth2/auth
-      - FIREBASE_TOKEN_URI=https://oauth2.googleapis.com/token
+      # ⚠️ ATTENTION: Les vraies valeurs doivent être dans un fichier .env (non commité)
+      # Créez backend/.env avec ces variables :
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID:-dringdring-11a84}
+      - FIREBASE_PRIVATE_KEY_ID=${FIREBASE_PRIVATE_KEY_ID:-your-private-key-id}
+      - FIREBASE_PRIVATE_KEY=${FIREBASE_PRIVATE_KEY:-your-private-key-here}
+      - FIREBASE_CLIENT_EMAIL=${FIREBASE_CLIENT_EMAIL:-your-client-email@project.iam.gserviceaccount.com}
+      - FIREBASE_CLIENT_ID=${FIREBASE_CLIENT_ID:-your-client-id}
+      - FIREBASE_AUTH_URI=${FIREBASE_AUTH_URI:-https://accounts.google.com/o/oauth2/auth}
+      - FIREBASE_TOKEN_URI=${FIREBASE_TOKEN_URI:-https://oauth2.googleapis.com/token}
       # Sécurité
       - SECRET_KEY=dringdring-super-secret-key-2025-production
       - JWT_SECRET_KEY=dringdring-jwt-secret-key-2025-production
