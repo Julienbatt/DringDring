@@ -1,10 +1,11 @@
 "use client";
-import { useEffect, useState, useMemo } from "react";
+
+import DeliveryEditModal from "@/components/DeliveryEditModal";
 import HQAdminLayout from "@/components/HQAdminLayout";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import { apiAuthGet } from "@/lib/api";
 import { showToast } from "@/lib/toast";
-import DeliveryEditModal from "@/components/DeliveryEditModal";
+import { useEffect, useMemo, useState } from "react";
 
 type HQDelivery = {
   id: string;
@@ -119,7 +120,7 @@ export default function HQAdminDeliveriesPage() {
 
   // Filtrage et tri avancés
   const filteredAndSortedDeliveries = useMemo(() => {
-    let filtered = deliveries.filter(delivery => {
+    const filtered = deliveries.filter(delivery => {
       const deliveryDate = new Date(delivery.date);
       const now = new Date();
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());

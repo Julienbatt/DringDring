@@ -1,296 +1,236 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useMemo } from "react";
 import Layout from "@/components/Layout";
 import Breadcrumbs from "@/components/Breadcrumbs";
-import { auth } from "@/lib/firebase";
-import { onAuthStateChanged, User } from "firebase/auth";
-import { useRouter } from "next/navigation";
-import Link from "next/link";
+import { useProtectedRoute } from "@/hooks/useProtectedRoute";
+import { PageLoader, PageError } from "@/components/loading/PageState";
+import { StatsCard } from "@/components/dashboard/StatsCard";
+import { ActionCard } from "@/components/dashboard/ActionCard";
+import { RegionList } from "@/components/dashboard/RegionList";
+import { hqActions } from "@/data/mocks/dashboard";
+import { formatCurrency } from "@/lib/formatters";
+import { useHqDashboard } from "@/hooks/useHqDashboard";
 
-type HqStats = {
-  totalShops: number;
-  totalDeliveries: number;
-  totalRevenue: number;
-  activeRegions: number;
-  thisMonthDeliveries: number;
-  thisMonthRevenue: number;
-};
-
-type Region = {
-  id: string;
-  name: string;
-  shops: number;
-  deliveries: number;
-  revenue: number;
-};
+const PERFORMANCE_LOOKBACK_DAYS = 30;
 
 export default function HqAdminPage() {
-  const [stats, setStats] = useState<HqStats | null>(null);
-  const [regions, setRegions] = useState<Region[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<User | null>(null);
-  const router = useRouter();
+  const { user, claims, status } = useProtectedRoute({
+    redirectTo: "/login/hq-admin",
+    requiredRoles: "hq",
+  });
+  const chainId = typeof claims?.chainId === "string" ? claims.chainId : null;
+  const chainName = typeof claims?.chainName === "string" ? claims.chainName : null;
+  const {
+    stats,
+    regions,
+    loading: dashboardLoading,
+    error: dashboardError,
+    lastUpdated,
+    refresh,
+    refreshing,
+  } = useHqDashboard({ enabled: Boolean(user) && Boolean(chainId), chainId: chainId ?? undefined });
 
-  const loadHqData = useCallback(async () => {
-    try {
-      setLoading(true);
-      // Données simulées pour l'interface HQ
-      const mockStats: HqStats = {
-        totalShops: 24,
-        totalDeliveries: 1847,
-        totalRevenue: 46250,
-        activeRegions: 3,
-        thisMonthDeliveries: 342,
-        thisMonthRevenue: 8550
-      };
-
-      const mockRegions: Region[] = [
-        {
-          id: "1",
-          name: "Valais",
-          shops: 12,
-          deliveries: 892,
-          revenue: 22300
-        },
-        {
-          id: "2", 
-          name: "Vaud",
-          shops: 8,
-          deliveries: 623,
-          revenue: 15575
-        },
-        {
-          id: "3",
-          name: "Genève",
-          shops: 4,
-          deliveries: 332,
-          revenue: 8375
-        }
-      ];
-
-      setStats(mockStats);
-      setRegions(mockRegions);
-    } catch (error) {
-      console.error("Erreur chargement données HQ:", error);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      if (!currentUser) {
-        router.push('/login?role=admin');
-      }
+  const showSkeleton = dashboardLoading && !stats;
+  const formattedLastUpdated = useMemo(() => {
+    if (!lastUpdated) return "Jamais synchronisé";
+    return lastUpdated.toLocaleString("fr-CH", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
     });
-    return () => unsub();
-  }, [router]);
+  }, [lastUpdated]);
 
-  useEffect(() => {
-    if (user) {
-      loadHqData();
-    }
-  }, [user, loadHqData]);
-
-  if (!user) {
-    return null; // Redirection en cours
-  }
-
-  if (loading) {
+  if (status === "loading" || status === "redirecting") {
     return (
       <Layout>
-        <div className="flex items-center justify-center min-h-screen">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-            <p className="mt-4 text-gray-600">Chargement des données HQ...</p>
-          </div>
-        </div>
+        <PageLoader title="Chargement du tableau de bord HQ..." />
+      </Layout>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
+
+  if (!chainId) {
+    return (
+      <Layout>
+        <PageError
+          title="Aucune enseigne liée"
+          description="Votre compte HQ n'est associé à aucune enseigne. Contactez le support."
+          action={
+            <button
+              type="button"
+              onClick={() => refresh()}
+              className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+            >
+              Réessayer
+            </button>
+          }
+        />
+      </Layout>
+    );
+  }
+
+  if (dashboardError) {
+    return (
+      <Layout>
+        <PageError
+          title="Erreur lors du chargement"
+          description={dashboardError}
+          action={
+            <button
+              type="button"
+              onClick={refresh}
+              className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+            >
+              Réessayer
+            </button>
+          }
+        />
       </Layout>
     );
   }
 
   return (
     <Layout>
-      <div>
+      <div className="space-y-6">
         <Breadcrumbs />
-        <div className="mt-6">
-          <div className="max-w-7xl">
-            {/* Header */}
-            <div className="mb-8">
-              <h1 className="text-3xl font-bold text-gray-900">🏢 Administration Enseigne</h1>
-              <p className="mt-2 text-gray-600">Gestion globale de votre enseigne et de ses magasins</p>
+        <header className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+            Administration Enseigne
+          </p>
+          <h1 className="mt-1 text-3xl font-bold text-gray-900">
+            Vue d&apos;ensemble {chainName ? chainName : "HQ"}
+          </h1>
+          <p className="mt-2 text-sm text-gray-600">
+            Gestion globale de votre enseigne et pilotage temps réel.
+          </p>
+              <p className="mt-1 text-xs text-gray-400">
+                Dernière synchronisation : {formattedLastUpdated}
+              </p>
             </div>
+            <button
+              type="button"
+              onClick={refresh}
+              disabled={refreshing}
+              className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {refreshing ? "Actualisation..." : "Rafraîchir les données"}
+            </button>
+          </div>
+        </header>
 
-            {/* Stats Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-              <div className="bg-white overflow-hidden shadow rounded-lg">
-                <div className="p-5">
-                  <div className="flex items-center">
-                    <div className="flex-shrink-0">
-                      <div className="w-8 h-8 bg-blue-500 rounded-md flex items-center justify-center">
-                        <span className="text-white text-sm font-bold">🏪</span>
-                      </div>
-                    </div>
-                    <div className="ml-5 w-0 flex-1">
-                      <dl>
-                        <dt className="text-sm font-medium text-gray-500 truncate">Magasins</dt>
-                        <dd className="text-lg font-medium text-gray-900">{stats?.totalShops}</dd>
-                      </dl>
-                    </div>
-                  </div>
-                </div>
-              </div>
+        {showSkeleton ? (
+          <DashboardSkeleton />
+        ) : (
+          <>
+        <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+              <StatsCard label="Magasins" value={stats?.totalShops ?? "—"} icon="🏪" tone="blue" />
+          <StatsCard
+            label="Livraisons"
+                value={stats?.totalDeliveries ?? "—"}
+            icon="📦"
+            tone="green"
+          />
+          <StatsCard
+            label="Revenus cumulés"
+                value={stats?.totalRevenue ?? undefined}
+            icon="💰"
+            tone="purple"
+            variant="currency"
+          />
+              <StatsCard
+                label="Régions actives"
+                value={stats?.activeRegions ?? "—"}
+                icon="🌍"
+                tone="orange"
+              />
+        </section>
 
-              <div className="bg-white overflow-hidden shadow rounded-lg">
-                <div className="p-5">
-                  <div className="flex items-center">
-                    <div className="flex-shrink-0">
-                      <div className="w-8 h-8 bg-green-500 rounded-md flex items-center justify-center">
-                        <span className="text-white text-sm font-bold">📦</span>
-                      </div>
-                    </div>
-                    <div className="ml-5 w-0 flex-1">
-                      <dl>
-                        <dt className="text-sm font-medium text-gray-500 truncate">Livraisons Total</dt>
-                        <dd className="text-lg font-medium text-gray-900">{stats?.totalDeliveries}</dd>
-                      </dl>
-                    </div>
-                  </div>
-                </div>
-              </div>
+        <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {hqActions.map((action) => (
+            <ActionCard key={action.title} {...action} />
+          ))}
+        </section>
 
-              <div className="bg-white overflow-hidden shadow rounded-lg">
-                <div className="p-5">
-                  <div className="flex items-center">
-                    <div className="flex-shrink-0">
-                      <div className="w-8 h-8 bg-purple-500 rounded-md flex items-center justify-center">
-                        <span className="text-white text-sm font-bold">💰</span>
-                      </div>
-                    </div>
-                    <div className="ml-5 w-0 flex-1">
-                      <dl>
-                        <dt className="text-sm font-medium text-gray-500 truncate">Revenus Total</dt>
-                        <dd className="text-lg font-medium text-gray-900">{stats?.totalRevenue?.toLocaleString()} CHF</dd>
-                      </dl>
-                    </div>
-                  </div>
-                </div>
+        <section className="grid gap-4 lg:grid-cols-2">
+          <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  Ce mois
+                </p>
+                <h3 className="text-lg font-semibold text-gray-900">Performance mensuelle</h3>
               </div>
-
-              <div className="bg-white overflow-hidden shadow rounded-lg">
-                <div className="p-5">
-                  <div className="flex items-center">
-                    <div className="flex-shrink-0">
-                      <div className="w-8 h-8 bg-orange-500 rounded-md flex items-center justify-center">
-                        <span className="text-white text-sm font-bold">🌍</span>
-                      </div>
-                    </div>
-                    <div className="ml-5 w-0 flex-1">
-                      <dl>
-                        <dt className="text-sm font-medium text-gray-500 truncate">Régions</dt>
-                        <dd className="text-lg font-medium text-gray-900">{stats?.activeRegions}</dd>
-                      </dl>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <span className="text-xs font-medium text-gray-400">Temps réel</span>
             </div>
-
-            {/* Actions Rapides */}
-            <div className="bg-white shadow rounded-lg mb-8">
-              <div className="px-4 py-5 sm:p-6">
-                <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">
-                  Actions Rapides
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <Link
-                    href="/admin/hq/regions"
-                    className="group bg-blue-50 rounded-lg p-4 hover:bg-blue-100 transition-colors"
-                  >
-                    <div className="flex items-center">
-                      <div className="flex-shrink-0">
-                        <div className="w-10 h-10 bg-blue-500 rounded-lg flex items-center justify-center">
-                          <span className="text-white text-lg">🌍</span>
-                        </div>
-                      </div>
-                      <div className="ml-4">
-                        <h4 className="text-sm font-medium text-gray-900 group-hover:text-blue-700">
-                          Gestion Régions
-                        </h4>
-                        <p className="text-sm text-gray-500">Administrer les régions</p>
-                      </div>
-                    </div>
-                  </Link>
-
-                  <Link
-                    href="/admin/hq/shops"
-                    className="group bg-green-50 rounded-lg p-4 hover:bg-green-100 transition-colors"
-                  >
-                    <div className="flex items-center">
-                      <div className="flex-shrink-0">
-                        <div className="w-10 h-10 bg-green-500 rounded-lg flex items-center justify-center">
-                          <span className="text-white text-lg">🏪</span>
-                        </div>
-                      </div>
-                      <div className="ml-4">
-                        <h4 className="text-sm font-medium text-gray-900 group-hover:text-green-700">
-                          Tous les Magasins
-                        </h4>
-                        <p className="text-sm text-gray-500">Voir tous les magasins</p>
-                      </div>
-                    </div>
-                  </Link>
-
-                  <Link
-                    href="/admin/hq/reports"
-                    className="group bg-purple-50 rounded-lg p-4 hover:bg-purple-100 transition-colors"
-                  >
-                    <div className="flex items-center">
-                      <div className="flex-shrink-0">
-                        <div className="w-10 h-10 bg-purple-500 rounded-lg flex items-center justify-center">
-                          <span className="text-white text-lg">📊</span>
-                        </div>
-                      </div>
-                      <div className="ml-4">
-                        <h4 className="text-sm font-medium text-gray-900 group-hover:text-purple-700">
-                          Rapports
-                        </h4>
-                        <p className="text-sm text-gray-500">Analyses et exports</p>
-                      </div>
-                    </div>
-                  </Link>
-                </div>
+            <div className="mt-6 grid gap-4 md:grid-cols-2">
+              <div className="rounded-xl bg-gray-50 p-4">
+                <p className="text-xs uppercase text-gray-500">Livraisons</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {stats?.thisMonthDeliveries ?? "—"}
+                </p>
+                    <p className="text-xs text-gray-500">
+                      sur les {PERFORMANCE_LOOKBACK_DAYS} derniers jours
+                    </p>
               </div>
-            </div>
-
-            {/* Régions */}
-            <div className="bg-white shadow rounded-lg">
-              <div className="px-4 py-5 sm:p-6">
-                <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">
-                  Performance par Région
-                </h3>
-                <div className="space-y-4">
-                  {regions.map((region) => (
-                    <div key={region.id} className="border border-gray-200 rounded-lg p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <h4 className="text-lg font-medium text-gray-900">{region.name}</h4>
-                          <p className="text-sm text-gray-500">{region.shops} magasins</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm font-medium text-gray-900">{region.deliveries} livraisons</p>
-                          <p className="text-sm text-gray-500">{region.revenue.toLocaleString()} CHF</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+              <div className="rounded-xl bg-gray-50 p-4">
+                <p className="text-xs uppercase text-gray-500">Revenus</p>
+                <p className="text-2xl font-bold text-gray-900">
+                      {formatCurrency(stats?.thisMonthRevenue)}
+                </p>
+                <p className="text-xs text-gray-500">vs. période précédente</p>
               </div>
             </div>
           </div>
-        </div>
+
+          {regions.length > 0 ? (
+            <RegionList title="Performance par région" regions={regions} />
+          ) : (
+            <div className="rounded-2xl border border-gray-100 bg-white p-6 text-sm text-gray-500 shadow-sm">
+              Aucune activité régionale détectée pour cette enseigne.
+            </div>
+          )}
+        </section>
+          </>
+        )}
       </div>
     </Layout>
   );
 }
+
+const DashboardSkeleton = () => (
+  <div className="space-y-6">
+    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      {Array.from({ length: 4 }).map((_, idx) => (
+        <SkeletonPanel key={`stats-${idx}`} />
+      ))}
+    </div>
+    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      {Array.from({ length: 3 }).map((_, idx) => (
+        <SkeletonPanel key={`actions-${idx}`} lines={2} />
+      ))}
+    </div>
+    <div className="grid gap-4 lg:grid-cols-2">
+      <SkeletonPanel lines={4} />
+      <SkeletonPanel lines={4} />
+    </div>
+  </div>
+);
+
+const SkeletonPanel = ({ lines = 3 }: { lines?: number }) => (
+  <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
+    <div className="space-y-3 animate-pulse">
+      {Array.from({ length: lines }).map((_, idx) => (
+        <div
+          key={idx}
+          className="h-4 w-full rounded bg-gray-100"
+          style={{ width: `${80 - idx * 10}%` }}
+        />
+      ))}
+    </div>
+  </div>
+);

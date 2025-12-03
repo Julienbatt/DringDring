@@ -45,14 +45,14 @@ export default function SignupPage() {
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    if (name.includes('.')) {
-      const [parent, child] = name.split('.');
-      setFormData(prev => ({
+    if (name.startsWith("address.")) {
+      const [, child] = name.split(".");
+      setFormData((prev) => ({
         ...prev,
-        [parent]: {
-          ...prev[parent as keyof typeof prev],
-          [child]: value
-        }
+        address: {
+          ...prev.address,
+          [child as keyof typeof prev.address]: value,
+        },
       }));
     } else {
       setFormData(prev => ({

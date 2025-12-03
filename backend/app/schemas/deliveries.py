@@ -20,5 +20,7 @@ class Delivery(DeliveryCreate):
     createdAt: Optional[str] = None
     updatedAt: Optional[str] = None
     courierNotes: Optional[str] = None
+    clientName: Optional[str] = None
+    clientAddress: Optional[str] = None
 
 

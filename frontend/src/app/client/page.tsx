@@ -54,14 +54,25 @@ export default function ClientDashboardPage() {
     setLoading(true);
     try {
       const [statsData, upcomingData, allDeliveriesData] = await Promise.all([
-        apiAuthGet<ClientStats>("/test/client/stats"),
-        apiAuthGet<UpcomingDelivery[]>("/test/client/deliveries/upcoming"),
-        apiAuthGet<any[]>("/test/client/deliveries")
+        apiAuthGet<ClientStats>("/client/stats"),
+        apiAuthGet<UpcomingDelivery[]>("/client/deliveries/upcoming"),
+        apiAuthGet<any[]>("/client/deliveries")
       ]);
       
       // Calculer les statistiques en temps réel
-      const calculatedStats = calculateRealTimeStats(allDeliveriesData);
-      setStats(calculatedStats);
+      // Note: The backend stats endpoint might already provide this, but we recalculate 
+      // if the frontend wants custom logic or if backend stats are just summaries.
+      // Actually, backend /client/stats returns computed stats. 
+      // We should use backend stats directly if possible, but the code below 
+      // recalculates using allDeliveriesData. 
+      // Since we have the real stats from backend now, we can use them directly
+      // OR we can keep frontend calc if we want to be robust against backend changes.
+      // Let's prefer backend stats but use frontend calc as fallback or verification.
+      
+      // However, calculateRealTimeStats logic in frontend seems duplicate of backend logic.
+      // To "optimize", we should use the backend stats.
+      
+      setStats(statsData); // Use backend stats
       setUpcoming(upcomingData);
     } catch (error: any) {
       console.error("Erreur chargement client:", error);

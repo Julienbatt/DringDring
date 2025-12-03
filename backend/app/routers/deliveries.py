@@ -40,19 +40,23 @@ def create_delivery(payload: DeliveryCreate, current_user: CurrentUser = Depends
         data = payload.model_dump()
         data.update({"createdAt": datetime.utcnow().isoformat(), "updatedAt": datetime.utcnow().isoformat()})
         
+        # Fetch client info for denormalization and pricing
+        client_info = {}
+        try:
+            c = db.collection("clients").document(payload.clientId).get()
+            client_info = c.to_dict() or {}
+        except Exception:
+            client_info = {}
+
         # Compute pricing if shop configuration exists
         try:
             shop_snap = None
             shop = None
-            client_info = {}
+            # client_info already fetched above
             if payload.shopId:
                 shop_snap = db.collection("shops").document(payload.shopId).get()
                 shop = shop_snap.to_dict() if shop_snap and shop_snap.exists else None
-            try:
-                c = db.collection("clients").document(payload.clientId).get()
-                client_info = c.to_dict() or {}
-            except Exception:
-                client_info = {}
+            
             if shop and shop.get("pricing"):
                 pr = compute_fee_for_delivery({**data}, shop, client_info)
                 data.update({
@@ -80,6 +84,12 @@ def create_delivery(payload: DeliveryCreate, current_user: CurrentUser = Depends
                 )
         except Exception:
             pass
+
+        # Denormalize client info
+        if client_info:
+            data["clientName"] = f"{client_info.get('firstName', '')} {client_info.get('lastName', '')}".strip()
+            addr = client_info.get("address") or {}
+            data["clientAddress"] = f"{addr.get('street', '')} {addr.get('streetNumber', '')}, {addr.get('zip', '')} {addr.get('city', '')}".strip()
 
         # write to deliveries
         doc_ref = db.collection("deliveries").document()

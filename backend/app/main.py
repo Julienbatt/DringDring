@@ -71,13 +71,26 @@ async def add_request_id_and_timing(request: Request, call_next):
             response.headers["X-Process-Time"] = str(duration_ms)
 
 
-# CORS for local frontend
+# CORS configuration
+# Allow local development and production domains
+allowed_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+# Add production origins from environment
+production_origin = os.getenv("FRONTEND_URL", "").strip()
+if production_origin:
+    allowed_origins.append(production_origin)
+
+# Allow Vercel preview deployments (*.vercel.app)
+vercel_origin = os.getenv("VERCEL_URL", "").strip()
+if vercel_origin:
+    allowed_origins.append(f"https://{vercel_origin}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=[
@@ -87,7 +100,7 @@ app.add_middleware(
         "X-Requested-With",
         "Origin",
     ],
-    expose_headers=["Content-Disposition", "Content-Type"],
+    expose_headers=["Content-Disposition", "Content-Type", "X-Request-ID", "X-Process-Time"],
 )
 
 

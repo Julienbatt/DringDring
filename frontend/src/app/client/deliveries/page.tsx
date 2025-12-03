@@ -1,9 +1,9 @@
 "use client";
-import { useEffect, useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ClientLayout from "@/components/ClientLayout";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import LoadingSpinner from "@/components/LoadingSpinner";
-import { apiAuthGet, apiAuthPut } from "@/lib/api";
+import { apiAuthGet } from "@/lib/api";
 import { showToast } from "@/lib/toast";
 import Link from "next/link";
 import DeliveryEditModal from "@/components/DeliveryEditModal";
@@ -22,31 +22,88 @@ type ClientDelivery = {
 };
 
 type ClientStats = {
-  totalDeliveries: number;
+  total: number;
   totalSpent: number;
   averageOrderValue: number;
   byStatus: Record<string, number>;
   byShop: Record<string, number>;
 };
 
+type DateFilter = "all" | "week" | "month" | "quarter" | "custom";
+type StatusFilter = ClientDelivery["status"] | "all";
+type SortField = "date" | "amount" | "shop" | "status";
+type SortOrder = "asc" | "desc";
+type DateRange = { start: string; end: string };
+
+const STATUS_PRIORITY: Record<ClientDelivery["status"], number> = {
+  scheduled: 1,
+  confirmed: 2,
+  in_progress: 3,
+  delivered: 4,
+  cancelled: 5,
+};
+
+const TODAY_ISO = new Date().toISOString().split("T")[0];
+const INITIAL_CUSTOM_RANGE = { start: TODAY_ISO, end: TODAY_ISO };
+
+const toValidDate = (value: string) => {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const formatDate = (dateString: string) => {
+  const parsed = toValidDate(dateString);
+  if (!parsed) return "—";
+  return parsed.toLocaleDateString("fr-CH", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+};
+
+const formatTime = (dateString: string) => {
+  const parsed = toValidDate(dateString);
+  if (!parsed) return "—";
+  return parsed.toLocaleTimeString("fr-CH", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
 export default function ClientDeliveriesPage() {
   const [deliveries, setDeliveries] = useState<ClientDelivery[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const requestIdRef = useRef(0);
   
   // Filtres avancés
-  const [dateFilter, setDateFilter] = useState<'all' | 'week' | 'month' | 'quarter' | 'custom'>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'scheduled' | 'confirmed' | 'in_progress' | 'delivered' | 'cancelled'>('all');
-  const [shopFilter, setShopFilter] = useState<string>('all');
-  const [amountFilter, setAmountFilter] = useState<{min: number, max: number}>({min: 0, max: 1000});
-  const [bagsFilter, setBagsFilter] = useState<{min: number, max: number}>({min: 0, max: 20});
-  const [searchTerm, setSearchTerm] = useState<string>('');
-  const [sortBy, setSortBy] = useState<'date' | 'amount' | 'shop' | 'status'>('date');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [customDateRange, setCustomDateRange] = useState<{start: string, end: string}>({
-    start: new Date().toISOString().split('T')[0],
-    end: new Date().toISOString().split('T')[0]
-  });
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [shopFilter, setShopFilter] = useState<string>("all");
+  const [amountFilter, setAmountFilter] = useState<{ min: number; max: number }>({ min: 0, max: 1000 });
+  const [bagsFilter, setBagsFilter] = useState<{ min: number; max: number }>({ min: 0, max: 20 });
+  const [searchTerm, setSearchTerm] = useState<string>("");
+  const [sortBy, setSortBy] = useState<SortField>("date");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
+  const [customDateRange, setCustomDateRange] = useState<DateRange>(INITIAL_CUSTOM_RANGE);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [
+    dateFilter,
+    statusFilter,
+    shopFilter,
+    amountFilter.min,
+    amountFilter.max,
+    bagsFilter.min,
+    bagsFilter.max,
+    searchTerm,
+    customDateRange.start,
+    customDateRange.end,
+  ]);
   
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -58,37 +115,38 @@ export default function ClientDeliveriesPage() {
   // Modal de modification
   const [editingDelivery, setEditingDelivery] = useState<ClientDelivery | null>(null);
 
-  useEffect(() => {
-    const fetchDeliveries = async () => {
-      try {
-        setLoading(true);
-        const data = await apiAuthGet<ClientDelivery[]>("/test/client/deliveries");
-        setDeliveries(data);
-      } catch (err: any) {
-        console.error("Error fetching client deliveries:", err);
-        setError(err.message || "Une erreur est survenue lors du chargement des livraisons.");
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchDeliveries();
-  }, []);
+const fetchDeliveries = useCallback(async (options?: { silent?: boolean }) => {
+  const currentRequestId = ++requestIdRef.current;
+  setError(null);
+  if (options?.silent) {
+    setRefreshing(true);
+  } else {
+    setLoading(true);
+  }
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('fr-CH', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
-  };
+  try {
+    const data = await apiAuthGet<ClientDelivery[]>("/test/client/deliveries");
+    if (currentRequestId === requestIdRef.current) {
+      setDeliveries(data);
+      setLastUpdated(new Date());
+    }
+  } catch (err) {
+    if (currentRequestId === requestIdRef.current) {
+      console.error("Error fetching client deliveries:", err);
+      const message = (err as { message?: string })?.message || "Une erreur est survenue lors du chargement des livraisons.";
+      setError(message);
+    }
+  } finally {
+    if (currentRequestId === requestIdRef.current) {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+}, []);
 
-  const formatTime = (dateString: string) => {
-    return new Date(dateString).toLocaleTimeString('fr-CH', {
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
+useEffect(() => {
+  fetchDeliveries();
+}, [fetchDeliveries]);
 
   const getStatusColor = (status: ClientDelivery['status']) => {
     switch (status) {
@@ -125,101 +183,120 @@ export default function ClientDeliveriesPage() {
   };
 
   // Filtrage et tri avancés
-  const filteredAndSortedDeliveries = useMemo(() => {
-    let filtered = deliveries.filter(delivery => {
-      const deliveryDate = new Date(delivery.date);
-      const now = new Date();
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const deliveryDay = new Date(deliveryDate.getFullYear(), deliveryDate.getMonth(), deliveryDate.getDate());
-      
-      // Filtre par date
-      let dateMatch = true;
-      switch (dateFilter) {
-        case 'week':
-          const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-          dateMatch = deliveryDay.getTime() >= weekAgo.getTime();
-          break;
-        case 'month':
-          const monthAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
-          dateMatch = deliveryDay.getTime() >= monthAgo.getTime();
-          break;
-        case 'quarter':
-          const quarterAgo = new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000);
-          dateMatch = deliveryDay.getTime() >= quarterAgo.getTime();
-          break;
-        case 'custom':
-          const startDate = new Date(customDateRange.start);
-          const endDate = new Date(customDateRange.end);
-          dateMatch = deliveryDay.getTime() >= startDate.getTime() && deliveryDay.getTime() <= endDate.getTime();
-          break;
-        default:
-          dateMatch = true;
-      }
+const filteredAndSortedDeliveries = useMemo(() => {
+  if (!deliveries.length) {
+    return [];
+  }
 
-      // Filtre par statut
-      const statusMatch = statusFilter === 'all' || delivery.status === statusFilter;
-      
-      // Filtre par magasin
-      const shopMatch = shopFilter === 'all' || delivery.shopName.toLowerCase().includes(shopFilter.toLowerCase());
-      
-      // Filtre par montant
-      const amountMatch = delivery.totalAmount >= amountFilter.min && delivery.totalAmount <= amountFilter.max;
-      
-      // Filtre par nombre de sacs
-      const bagsMatch = delivery.bags >= bagsFilter.min && delivery.bags <= bagsFilter.max;
-      
-      // Filtre par recherche
-      const searchMatch = searchTerm === '' || 
-        delivery.shopName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        delivery.shopAddress.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        delivery.notes?.toLowerCase().includes(searchTerm.toLowerCase());
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+  const searchEnabled = normalizedSearch.length > 0;
+  const selectedShop = shopFilter;
+  const today = new Date();
+  const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+  const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+  const ninetyDaysMs = 90 * 24 * 60 * 60 * 1000;
+  const customStart = toValidDate(customDateRange.start);
+  const customEnd = toValidDate(customDateRange.end);
 
-      return dateMatch && statusMatch && shopMatch && amountMatch && bagsMatch && searchMatch;
-    });
+  const filtered = deliveries.filter((delivery) => {
+    const deliveryDate = toValidDate(delivery.date);
+    if (!deliveryDate) return false;
 
-    // Tri
-    filtered.sort((a, b) => {
-      let aValue, bValue;
-      switch (sortBy) {
-        case 'date':
-          aValue = new Date(a.date).getTime();
-          bValue = new Date(b.date).getTime();
-          break;
-        case 'amount':
-          aValue = a.totalAmount;
-          bValue = b.totalAmount;
-          break;
-        case 'shop':
-          aValue = a.shopName;
-          bValue = b.shopName;
-          break;
-        case 'status':
-          aValue = a.status;
-          bValue = b.status;
-          break;
-        default:
-          aValue = new Date(a.date).getTime();
-          bValue = new Date(b.date).getTime();
-      }
-      
-      if (sortOrder === 'asc') {
-        return aValue > bValue ? 1 : -1;
-      } else {
-        return aValue < bValue ? 1 : -1;
-      }
-    });
+    const deliveryDay = new Date(deliveryDate.getFullYear(), deliveryDate.getMonth(), deliveryDate.getDate());
 
-    return filtered;
-  }, [deliveries, dateFilter, statusFilter, shopFilter, amountFilter, bagsFilter, searchTerm, sortBy, sortOrder, customDateRange]);
+    let dateMatch = true;
+    switch (dateFilter) {
+      case "week":
+        dateMatch = deliveryDay.getTime() >= todayMidnight.getTime() - sevenDaysMs;
+        break;
+      case "month":
+        dateMatch = deliveryDay.getTime() >= todayMidnight.getTime() - thirtyDaysMs;
+        break;
+      case "quarter":
+        dateMatch = deliveryDay.getTime() >= todayMidnight.getTime() - ninetyDaysMs;
+        break;
+      case "custom":
+        if (customStart && customEnd) {
+          dateMatch = deliveryDay.getTime() >= customStart.getTime() && deliveryDay.getTime() <= customEnd.getTime();
+        }
+        break;
+      default:
+        dateMatch = true;
+    }
+
+    const statusMatch = statusFilter === "all" || delivery.status === statusFilter;
+    const shopMatch = selectedShop === "all" || delivery.shopName === selectedShop;
+    const amountMatch = delivery.totalAmount >= amountFilter.min && delivery.totalAmount <= amountFilter.max;
+    const bagsMatch = delivery.bags >= bagsFilter.min && delivery.bags <= bagsFilter.max;
+
+    const searchFields = [
+      delivery.shopName,
+      delivery.shopAddress,
+      delivery.notes || "",
+      formatDate(delivery.date),
+    ];
+    const searchMatch =
+      !searchEnabled ||
+      searchFields.some((field) => field.toLowerCase().includes(normalizedSearch));
+
+    return dateMatch && statusMatch && shopMatch && amountMatch && bagsMatch && searchMatch;
+  });
+
+  const sorted = [...filtered].sort((a, b) => {
+    let comparison = 0;
+    switch (sortBy) {
+      case "date":
+        comparison = (toValidDate(a.date)?.getTime() ?? 0) - (toValidDate(b.date)?.getTime() ?? 0);
+        break;
+      case "amount":
+        comparison = a.totalAmount - b.totalAmount;
+        break;
+      case "shop":
+        comparison = a.shopName.localeCompare(b.shopName, "fr-CH", { sensitivity: "base" });
+        break;
+      case "status":
+        comparison = STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status];
+        break;
+      default:
+        comparison = (toValidDate(a.date)?.getTime() ?? 0) - (toValidDate(b.date)?.getTime() ?? 0);
+    }
+    return sortOrder === "asc" ? comparison : -comparison;
+  });
+
+  return sorted;
+}, [deliveries, dateFilter, statusFilter, shopFilter, amountFilter, bagsFilter, searchTerm, sortBy, sortOrder, customDateRange]);
 
   // Pagination
-  const totalPages = Math.ceil(filteredAndSortedDeliveries.length / itemsPerPage);
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const endIndex = startIndex + itemsPerPage;
-  const paginatedDeliveries = filteredAndSortedDeliveries.slice(startIndex, endIndex);
+const actualTotalPages = Math.ceil(filteredAndSortedDeliveries.length / itemsPerPage) || 0;
+const totalPages = Math.max(1, actualTotalPages);
+const startIndex = (currentPage - 1) * itemsPerPage;
+const endIndex = startIndex + itemsPerPage;
+const paginatedDeliveries = filteredAndSortedDeliveries.slice(startIndex, endIndex);
+const showPagination = actualTotalPages > 1;
+const maxPagesToShow = 5;
+const firstPageToShow = Math.max(
+  1,
+  Math.min(
+    currentPage - Math.floor(maxPagesToShow / 2),
+    Math.max(1, totalPages - maxPagesToShow + 1)
+  )
+);
+const lastPageToShow = Math.min(totalPages, firstPageToShow + maxPagesToShow - 1);
+const pageNumbers = Array.from({ length: lastPageToShow - firstPageToShow + 1 }, (_, idx) => firstPageToShow + idx);
 
-  // Statistiques
-  const stats = useMemo(() => {
+useEffect(() => {
+  setCurrentPage((prev) => {
+    if (actualTotalPages === 0) {
+      return 1;
+    }
+    const maxPage = Math.max(1, actualTotalPages);
+    return Math.min(prev, maxPage);
+  });
+}, [actualTotalPages]);
+
+// Statistiques
+  const stats = useMemo<ClientStats>(() => {
     const total = filteredAndSortedDeliveries.length;
     const totalSpent = filteredAndSortedDeliveries.reduce((sum, d) => sum + d.totalAmount, 0);
     const averageOrderValue = total > 0 ? totalSpent / total : 0;
@@ -236,73 +313,89 @@ export default function ClientDeliveriesPage() {
   }, [filteredAndSortedDeliveries]);
 
   // Liste des magasins uniques
-  const uniqueShops = useMemo(() => {
-    const shops = [...new Set(deliveries.map(d => d.shopName))];
-    return shops.sort();
-  }, [deliveries]);
+const uniqueShops = useMemo(() => {
+  return Array.from(new Set(deliveries.map(d => d.shopName).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b, "fr-CH", { sensitivity: "base" }));
+}, [deliveries]);
 
   // Export CSV
-  const exportToCSV = async () => {
-    setIsExporting(true);
-    try {
-      const csvContent = [
-        ['ID', 'Magasin', 'Adresse', 'Date', 'Heure', 'Sacs', 'Montant', 'Statut', 'Notes'],
-        ...filteredAndSortedDeliveries.map(delivery => [
-          delivery.id,
-          delivery.shopName,
-          delivery.shopAddress,
-          formatDate(delivery.date),
-          formatTime(delivery.date),
-          delivery.bags,
-          delivery.totalAmount.toFixed(2),
-          getStatusText(delivery.status),
-          delivery.notes || ''
-        ])
-      ].map(row => row.map(field => `"${field}"`).join(',')).join('\n');
+const escapeCsvField = (value: unknown) => {
+  const stringValue = (value ?? "").toString().replace(/"/g, '""').replace(/\r?\n|\r/g, " ");
+  return `"${stringValue}"`;
+};
 
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const link = document.createElement('a');
-      const url = URL.createObjectURL(blob);
-      link.setAttribute('href', url);
-      link.setAttribute('download', `mes_livraisons_${new Date().toISOString().split('T')[0]}.csv`);
-      link.style.visibility = 'hidden';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      
-      showToast("Export CSV réussi !", "success");
-    } catch (error) {
-      console.error("Erreur export CSV:", error);
-      showToast("Erreur lors de l'export CSV", "error");
-    } finally {
-      setIsExporting(false);
+const exportToCSV = async () => {
+  setIsExporting(true);
+  try {
+    if (filteredAndSortedDeliveries.length === 0) {
+      showToast("Aucune livraison à exporter", "info");
+      return;
     }
-  };
+
+    const header = ['ID', 'Magasin', 'Adresse', 'Date', 'Heure', 'Sacs', 'Montant', 'Statut', 'Notes'];
+    const rows = filteredAndSortedDeliveries.map(delivery => [
+      delivery.id,
+      delivery.shopName,
+      delivery.shopAddress,
+      formatDate(delivery.date),
+      formatTime(delivery.date),
+      delivery.bags,
+      delivery.totalAmount.toFixed(2),
+      getStatusText(delivery.status),
+      delivery.notes || ''
+    ]);
+
+    const csvContent = [header, ...rows]
+      .map(row => row.map(escapeCsvField).join(','))
+      .join('\r\n');
+
+    const blob = new Blob(["\ufeff" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `mes_livraisons_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    showToast("Export CSV réussi !", "success");
+  } catch (error) {
+    console.error("Erreur export CSV:", error);
+    showToast("Erreur lors de l'export CSV", "error");
+  } finally {
+    setIsExporting(false);
+  }
+};
 
   // Reset filters
-  const resetFilters = () => {
-    setDateFilter('all');
-    setStatusFilter('all');
-    setShopFilter('all');
-    setAmountFilter({min: 0, max: 1000});
-    setBagsFilter({min: 0, max: 20});
-    setSearchTerm('');
-    setSortBy('date');
-    setSortOrder('desc');
-    setCurrentPage(1);
-  };
+const resetFilters = () => {
+  setDateFilter('all');
+  setStatusFilter('all');
+  setShopFilter('all');
+  setAmountFilter({min: 0, max: 1000});
+  setBagsFilter({min: 0, max: 20});
+  setSearchTerm('');
+  setSortBy('date');
+  setSortOrder('desc');
+  setItemsPerPage(20);
+  setCustomDateRange(INITIAL_CUSTOM_RANGE);
+  setCurrentPage(1);
+};
 
-  const handleEditDelivery = (delivery: ClientDelivery) => {
-    // Vérifier si la livraison peut être modifiée
-    const deliveryDate = new Date(delivery.date);
-    const now = new Date();
-    const isPastDelivery = deliveryDate < now || delivery.status === 'delivered' || delivery.status === 'cancelled';
-    
-    if (isPastDelivery) {
+const canModifyDelivery = (delivery: ClientDelivery) => {
+  const deliveryDate = toValidDate(delivery.date);
+  if (!deliveryDate) return false;
+  if (["delivered", "cancelled"].includes(delivery.status)) return false;
+  return deliveryDate.getTime() > Date.now();
+};
+
+const handleEditDelivery = (delivery: ClientDelivery) => {
+  if (!canModifyDelivery(delivery)) {
       showToast("Cette livraison ne peut plus être modifiée", "info");
       return;
     }
-    
     setEditingDelivery(delivery);
   };
 
@@ -314,6 +407,10 @@ export default function ClientDeliveriesPage() {
     );
     setEditingDelivery(null);
   };
+
+const handleManualRefresh = () => {
+  fetchDeliveries({ silent: true });
+};
 
   if (loading) {
     return (
@@ -339,14 +436,26 @@ export default function ClientDeliveriesPage() {
       <Breadcrumbs />
       <div className="mt-6 space-y-6">
         {/* Header */}
-        <div className="flex justify-between items-center">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Mes Livraisons</h1>
             <p className="mt-2 text-gray-600">
-              Consultez l'historique complet de vos livraisons
+              Consultez l&rsquo;historique complet de vos livraisons
             </p>
           </div>
-          <div className="flex space-x-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {lastUpdated && (
+              <span className="text-xs text-gray-500">
+                Maj&nbsp;{lastUpdated.toLocaleTimeString("fr-CH", { hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+            <button
+              onClick={handleManualRefresh}
+              disabled={refreshing}
+              className="px-4 py-2 border border-gray-200 text-sm font-medium rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {refreshing ? "Actualisation..." : "🔄 Actualiser"}
+            </button>
             <button
               onClick={exportToCSV}
               disabled={isExporting}
@@ -484,7 +593,7 @@ export default function ClientDeliveriesPage() {
                 <div className="space-y-2">
                   <select
                     value={dateFilter}
-                    onChange={(e) => setDateFilter(e.target.value as any)}
+                    onChange={(e) => setDateFilter(e.target.value as DateFilter)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                   >
                     <option value="all">Toutes les dates</option>
@@ -536,7 +645,7 @@ export default function ClientDeliveriesPage() {
                 </label>
                 <select
                   value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value as any)}
+                  onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                 >
                   <option value="all">Tous les statuts</option>
@@ -556,7 +665,7 @@ export default function ClientDeliveriesPage() {
                 <div className="flex space-x-2">
                   <select
                     value={sortBy}
-                    onChange={(e) => setSortBy(e.target.value as any)}
+                    onChange={(e) => setSortBy(e.target.value as SortField)}
                     className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                   >
                     <option value="date">Date</option>
@@ -753,7 +862,7 @@ export default function ClientDeliveriesPage() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <button 
                         onClick={() => handleEditDelivery(delivery)}
-                        disabled={new Date(delivery.date) < new Date() || delivery.status === 'delivered' || delivery.status === 'cancelled'}
+                        disabled={!canModifyDelivery(delivery)}
                         className="text-blue-600 hover:text-blue-900 text-xs disabled:text-gray-400 disabled:cursor-not-allowed"
                       >
                         ✏️ Modifier
@@ -766,7 +875,7 @@ export default function ClientDeliveriesPage() {
           </div>
 
           {/* Pagination */}
-          {totalPages > 1 && (
+          {showPagination && (
             <div className="bg-white px-4 py-3 border-t border-gray-200 sm:px-6">
               <div className="flex items-center justify-between">
                 <div className="flex-1 flex justify-between sm:hidden">
@@ -803,22 +912,19 @@ export default function ClientDeliveriesPage() {
                       </button>
                       
                       {/* Pages */}
-                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                        const page = i + 1;
-                        return (
-                          <button
-                            key={page}
-                            onClick={() => setCurrentPage(page)}
-                            className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
-                              currentPage === page
-                                ? 'z-10 bg-blue-50 border-blue-500 text-blue-600'
-                                : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
-                            }`}
-                          >
-                            {page}
-                          </button>
-                        );
-                      })}
+                      {pageNumbers.map((page) => (
+                        <button
+                          key={page}
+                          onClick={() => setCurrentPage(page)}
+                          className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
+                            currentPage === page
+                              ? 'z-10 bg-blue-50 border-blue-500 text-blue-600'
+                              : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
+                          }`}
+                        >
+                          {page}
+                        </button>
+                      ))}
                       
                       <button
                         onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}

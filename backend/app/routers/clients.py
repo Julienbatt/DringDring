@@ -37,8 +37,9 @@ def _build_index_from_firestore() -> None:
     _client_index_loaded_at = time.time()
 
 
-@router.on_event("startup")
-def _warmup_client_index() -> None:
+# Warmup function to be called at startup (use lifespan in newer FastAPI versions)
+def warmup_client_index() -> None:
+    """Warmup function to build client index at startup."""
     try:
         _build_index_from_firestore()
     except Exception:

@@ -10,10 +10,38 @@ SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
 def _get_credentials():
+    """
+    Get Google Sheets credentials from either file or environment variables.
+    Supports both service account JSON file and individual env vars for Docker/Cloud deployments.
+    """
     key_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    if not key_path:
-        raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS is not set")
-    return service_account.Credentials.from_service_account_file(key_path, scopes=SHEETS_SCOPES)
+    
+    # Try file-based credentials first
+    if key_path and os.path.exists(key_path):
+        return service_account.Credentials.from_service_account_file(key_path, scopes=SHEETS_SCOPES)
+    
+    # Try environment variable-based credentials
+    project_id = os.getenv("FIREBASE_PROJECT_ID")
+    private_key = os.getenv("FIREBASE_PRIVATE_KEY")
+    client_email = os.getenv("FIREBASE_CLIENT_EMAIL")
+    
+    if project_id and private_key and client_email:
+        credentials_dict = {
+            "type": "service_account",
+            "project_id": project_id,
+            "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID", ""),
+            "private_key": private_key.replace("\\n", "\n"),
+            "client_email": client_email,
+            "client_id": os.getenv("FIREBASE_CLIENT_ID", ""),
+            "auth_uri": os.getenv("FIREBASE_AUTH_URI", "https://accounts.google.com/o/oauth2/auth"),
+            "token_uri": os.getenv("FIREBASE_TOKEN_URI", "https://oauth2.googleapis.com/token"),
+        }
+        return service_account.Credentials.from_service_account_info(credentials_dict, scopes=SHEETS_SCOPES)
+    
+    raise RuntimeError(
+        "Google Sheets credentials not configured. Set GOOGLE_APPLICATION_CREDENTIALS or "
+        "Firebase environment variables (FIREBASE_PROJECT_ID, FIREBASE_PRIVATE_KEY, FIREBASE_CLIENT_EMAIL)"
+    )
 
 
 def _get_service_and_ensure_sheet(spreadsheet_id: str, sheet_name: str):

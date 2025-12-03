@@ -1,3 +1,5 @@
+"use client";
+
 import { auth } from "@/lib/firebase";
 import { getIdToken } from "firebase/auth";
 

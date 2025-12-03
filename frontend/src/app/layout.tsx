@@ -18,6 +18,8 @@ export const metadata: Metadata = {
   description: "Votre plateforme de livraison locale, rapide et solidaire. Gérez vos livraisons, consultez vos statistiques et profitez d'un service de qualité.",
 };
 
+export const dynamic = "force-dynamic";
+
 export default function RootLayout({
   children,
 }: Readonly<{

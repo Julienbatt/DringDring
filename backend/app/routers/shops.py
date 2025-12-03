@@ -1,6 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from typing import List
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+from pydantic import BaseModel
+import os
+import time
+import csv
+from io import StringIO
 
 from ..dependencies.auth import get_current_user, CurrentUser
 from ..schemas.shops import Shop, ShopCreate
@@ -8,15 +14,6 @@ from ..services.db import get_db
 from ..services.sheets import upsert_sheet
 from ..services.metrics import log_business_metrics, log_performance_metrics, log_export_metrics, BusinessMetrics, calculate_business_metrics
 from ..services.firestore_optimization import FirestoreOptimizer
-from datetime import datetime
-import os
-import time
-from typing import List
-from datetime import timezone, timedelta
-from pydantic import BaseModel
-from fastapi.responses import StreamingResponse
-import csv
-from io import StringIO
 
 
 router = APIRouter(prefix="/shops", tags=["shops"]) 

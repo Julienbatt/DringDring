@@ -1,6 +1,0 @@
-# Legacy placeholder for worktree consistency.
-# Remove once legacy branches are cleaned.
-
-def test_complete_validation_placeholder():
-    assert True
-

@@ -3,46 +3,37 @@ import { useEffect, useState, useMemo } from "react";
 import ShopLayout from "@/components/ShopLayout";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import LoadingSpinner from "@/components/LoadingSpinner";
-import { apiAuthGet, apiAuthPut } from "@/lib/api";
+import { apiAuthGet, apiAuthDelete, getMe, type Me } from "@/lib/api";
 import { showToast } from "@/lib/toast";
 import Link from "next/link";
 import DeliveryEditModal from "@/components/DeliveryEditModal";
+import { auth } from "@/lib/firebase";
+import { onAuthStateChanged, getIdToken } from "firebase/auth";
 
 type ShopDelivery = {
   id: string;
-  date: string;
-  timeSlot: string;
+  startWindow: string;
   clientName: string;
   clientAddress: string;
   bags: number;
-  status: 'scheduled' | 'confirmed' | 'in_progress' | 'delivered' | 'cancelled';
-  totalAmount: number;
-  notes?: string;
-  createdAt: string;
-};
-
-type ShopStats = {
-  totalDeliveries: number;
-  todayDeliveries: number;
-  upcomingDeliveries: number;
-  pastDeliveries: number;
-  totalRevenue: number;
-  averageAmount: number;
-  byStatus: Record<string, number>;
+  status: 'scheduled' | 'delivered' | 'cancelled';
+  amount: number; // backend: amount
+  fee: number;
+  courierNotes?: string;
 };
 
 export default function ShopDeliveriesPage() {
   const [deliveries, setDeliveries] = useState<ShopDelivery[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [me, setMe] = useState<Me | null>(null);
   
   // Filtres avancés
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'week' | 'month' | 'custom'>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'scheduled' | 'confirmed' | 'in_progress' | 'delivered' | 'cancelled'>('all');
   const [amountFilter, setAmountFilter] = useState<{min: number, max: number}>({min: 0, max: 1000});
   const [bagsFilter, setBagsFilter] = useState<{min: number, max: number}>({min: 0, max: 20});
   const [searchTerm, setSearchTerm] = useState<string>('');
-  const [sortBy, setSortBy] = useState<'date' | 'amount' | 'client' | 'status'>('date');
+  const [sortBy, setSortBy] = useState<'date' | 'amount' | 'client'>('date');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [customDateRange, setCustomDateRange] = useState<{start: string, end: string}>({
     start: new Date().toISOString().split('T')[0],
@@ -63,31 +54,75 @@ export default function ShopDeliveriesPage() {
   const [selectedDeliveries, setSelectedDeliveries] = useState<string[]>([]);
 
   useEffect(() => {
-    const fetchDeliveries = async () => {
-      try {
-        setLoading(true);
-        const data = await apiAuthGet<ShopDelivery[]>("/test/shop/deliveries");
-        setDeliveries(data);
-      } catch (err: any) {
-        console.error("Error fetching shop deliveries:", err);
-        setError(err.message || "Une erreur est survenue lors du chargement des livraisons.");
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchDeliveries();
+    const unsub = onAuthStateChanged(auth, async (user) => {
+        if (!user) { setMe(null); setLoading(false); return; }
+        try {
+            const t = await getIdToken(user, true);
+            const m = await getMe(t);
+            setMe(m);
+            if (m.shopId) {
+                fetchDeliveries(m.shopId);
+            } else {
+                setLoading(false);
+            }
+        } catch (e) {
+            console.error(e);
+            setLoading(false);
+        }
+    });
+    return () => unsub();
   }, []);
 
+  const fetchDeliveries = async (shopId: string) => {
+    try {
+      setLoading(true);
+      // Fetch all deliveries for client-side filtering (or minimal paging)
+      // Using limit=1000 to get most recent
+      const res = await apiAuthGet<{deliveries: any[]}>(`/deliveries?shopId=${shopId}&limit=1000`);
+      
+      const mapped: ShopDelivery[] = res.deliveries.map((d: any) => {
+          // Determine status based on time if not present
+          let status: ShopDelivery['status'] = 'scheduled';
+          if (d.status) status = d.status;
+          else {
+              const start = new Date(d.startWindow);
+              if (start < new Date()) status = 'delivered'; // Simple heuristic
+          }
+
+          return {
+              id: d.id,
+              startWindow: d.startWindow,
+              clientName: d.clientName || d.clientId || "Client Inconnu",
+              clientAddress: d.clientAddress || "",
+              bags: d.bags || 0,
+              status: status,
+              amount: d.amount || 0,
+              fee: d.fee || 0,
+              courierNotes: d.courierNotes
+          };
+      });
+      
+      setDeliveries(mapped);
+    } catch (err: any) {
+      console.error("Error fetching shop deliveries:", err);
+      setError(err.message || "Une erreur est survenue lors du chargement des livraisons.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const formatDate = (dateString: string) => {
+    if (!dateString) return "";
     return new Date(dateString).toLocaleDateString('fr-CH', {
-      weekday: 'long',
+      weekday: 'short',
       year: 'numeric',
-      month: 'long',
+      month: 'short',
       day: 'numeric'
     });
   };
 
   const formatTime = (dateString: string) => {
+    if (!dateString) return "";
     return new Date(dateString).toLocaleTimeString('fr-CH', {
       hour: '2-digit',
       minute: '2-digit'
@@ -98,12 +133,8 @@ export default function ShopDeliveriesPage() {
     switch (status) {
       case 'delivered':
         return 'bg-green-100 text-green-800';
-      case 'confirmed':
-        return 'bg-blue-100 text-blue-800';
       case 'scheduled':
         return 'bg-yellow-100 text-yellow-800';
-      case 'in_progress':
-        return 'bg-purple-100 text-purple-800';
       case 'cancelled':
         return 'bg-red-100 text-red-800';
       default:
@@ -113,25 +144,18 @@ export default function ShopDeliveriesPage() {
 
   const getStatusText = (status: ShopDelivery['status']) => {
     switch (status) {
-      case 'delivered':
-        return 'Livrée';
-      case 'confirmed':
-        return 'Confirmée';
-      case 'scheduled':
-        return 'Programmée';
-      case 'in_progress':
-        return 'En cours';
-      case 'cancelled':
-        return 'Annulée';
-      default:
-        return status;
+      case 'delivered': return 'Livrée/Passée';
+      case 'scheduled': return 'Programmée';
+      case 'cancelled': return 'Annulée';
+      default: return status;
     }
   };
 
   // Filtrage et tri avancés
   const filteredAndSortedDeliveries = useMemo(() => {
     let filtered = deliveries.filter(delivery => {
-      const deliveryDate = new Date(delivery.date);
+      if (!delivery.startWindow) return false;
+      const deliveryDate = new Date(delivery.startWindow);
       const now = new Date();
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       const deliveryDay = new Date(deliveryDate.getFullYear(), deliveryDate.getMonth(), deliveryDate.getDate());
@@ -159,11 +183,8 @@ export default function ShopDeliveriesPage() {
           dateMatch = true;
       }
 
-      // Filtre par statut
-      const statusMatch = statusFilter === 'all' || delivery.status === statusFilter;
-      
       // Filtre par montant
-      const amountMatch = delivery.totalAmount >= amountFilter.min && delivery.totalAmount <= amountFilter.max;
+      const amountMatch = delivery.amount >= amountFilter.min && delivery.amount <= amountFilter.max;
       
       // Filtre par nombre de sacs
       const bagsMatch = delivery.bags >= bagsFilter.min && delivery.bags <= bagsFilter.max;
@@ -172,34 +193,30 @@ export default function ShopDeliveriesPage() {
       const searchMatch = searchTerm === '' || 
         delivery.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         delivery.clientAddress.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        delivery.notes?.toLowerCase().includes(searchTerm.toLowerCase());
+        (delivery.courierNotes || "").toLowerCase().includes(searchTerm.toLowerCase());
 
-      return dateMatch && statusMatch && amountMatch && bagsMatch && searchMatch;
+      return dateMatch && amountMatch && bagsMatch && searchMatch;
     });
 
     // Tri
     filtered.sort((a, b) => {
-      let aValue, bValue;
+      let aValue: any, bValue: any;
       switch (sortBy) {
         case 'date':
-          aValue = new Date(a.date).getTime();
-          bValue = new Date(b.date).getTime();
+          aValue = new Date(a.startWindow).getTime();
+          bValue = new Date(b.startWindow).getTime();
           break;
         case 'amount':
-          aValue = a.totalAmount;
-          bValue = b.totalAmount;
+          aValue = a.amount;
+          bValue = b.amount;
           break;
         case 'client':
           aValue = a.clientName;
           bValue = b.clientName;
           break;
-        case 'status':
-          aValue = a.status;
-          bValue = b.status;
-          break;
         default:
-          aValue = new Date(a.date).getTime();
-          bValue = new Date(b.date).getTime();
+          aValue = new Date(a.startWindow).getTime();
+          bValue = new Date(b.startWindow).getTime();
       }
       
       if (sortOrder === 'asc') {
@@ -210,7 +227,7 @@ export default function ShopDeliveriesPage() {
     });
 
     return filtered;
-  }, [deliveries, dateFilter, statusFilter, amountFilter, bagsFilter, searchTerm, sortBy, sortOrder, customDateRange]);
+  }, [deliveries, dateFilter, amountFilter, bagsFilter, searchTerm, sortBy, sortOrder, customDateRange]);
 
   // Pagination
   const totalPages = Math.ceil(filteredAndSortedDeliveries.length / itemsPerPage);
@@ -221,7 +238,7 @@ export default function ShopDeliveriesPage() {
   // Statistiques
   const stats = useMemo(() => {
     const total = filteredAndSortedDeliveries.length;
-    const totalRevenue = filteredAndSortedDeliveries.reduce((sum, d) => sum + d.totalAmount, 0);
+    const totalRevenue = filteredAndSortedDeliveries.reduce((sum, d) => sum + d.amount, 0);
     const averageAmount = total > 0 ? totalRevenue / total : 0;
     const byStatus = filteredAndSortedDeliveries.reduce((acc, d) => {
       acc[d.status] = (acc[d.status] || 0) + 1;
@@ -241,14 +258,14 @@ export default function ShopDeliveriesPage() {
           delivery.id,
           delivery.clientName,
           delivery.clientAddress,
-          formatDate(delivery.date),
-          formatTime(delivery.date),
+          formatDate(delivery.startWindow),
+          formatTime(delivery.startWindow),
           delivery.bags,
-          delivery.totalAmount.toFixed(2),
+          delivery.amount.toFixed(2),
           getStatusText(delivery.status),
-          delivery.notes || ''
+          delivery.courierNotes || ''
         ])
-      ].map(row => row.map(field => `"${field}"`).join(',')).join('\n');
+      ].map(row => row.map(field => `"${field}"`).join(',')).join('\\n');
 
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement('a');
@@ -272,7 +289,6 @@ export default function ShopDeliveriesPage() {
   // Reset filters
   const resetFilters = () => {
     setDateFilter('all');
-    setStatusFilter('all');
     setAmountFilter({min: 0, max: 1000});
     setBagsFilter({min: 0, max: 20});
     setSearchTerm('');
@@ -283,30 +299,30 @@ export default function ShopDeliveriesPage() {
 
   const handleEditDelivery = (delivery: ShopDelivery) => {
     // Vérifier si la livraison peut être modifiée
-    const deliveryDate = new Date(delivery.date);
+    const deliveryDate = new Date(delivery.startWindow);
     const now = new Date();
-    const isPastDelivery = deliveryDate < now || delivery.status === 'delivered' || delivery.status === 'cancelled';
+    const isPastDelivery = deliveryDate < now;
     
     if (isPastDelivery) {
-      showToast("Cette livraison ne peut plus être modifiée", "info");
+      showToast("Cette livraison ne peut plus être modifiée (date passée)", "info");
       return;
     }
     
-    // Convertir ShopDelivery en format attendu par DeliveryEditModal
-    const modalDelivery: any = {
+    // Adapter pour la modal
+    const modalDelivery = {
       ...delivery,
-      shopName: delivery.clientName, // ShopDelivery n'a pas shopName, utiliser clientName
-      shopAddress: delivery.clientAddress, // ShopDelivery n'a pas shopAddress, utiliser clientAddress
+      date: delivery.startWindow,
+      timeSlot: "00:00", // Placeholder
+      shopName: delivery.clientName, 
+      totalAmount: delivery.amount,
+      notes: delivery.courierNotes
     };
     setEditingDelivery(modalDelivery);
   };
 
-  const handleSaveDelivery = (updatedDelivery: Partial<ShopDelivery> & { id: string; date: string; timeSlot: string; bags: number }) => {
-    setDeliveries(prev => 
-      prev.map(delivery => 
-        delivery.id === updatedDelivery.id ? { ...delivery, ...updatedDelivery } as ShopDelivery : delivery
-      )
-    );
+  const handleSaveDelivery = (updatedDelivery: any) => {
+    // Reload deliveries
+    if(me?.shopId) fetchDeliveries(me.shopId);
     setEditingDelivery(null);
   };
 
@@ -327,60 +343,43 @@ export default function ShopDeliveriesPage() {
     );
   };
 
-  const handleBulkAction = async (action: 'cancel' | 'confirm') => {
+  const handleBulkAction = async (action: 'cancel') => {
     if (selectedDeliveries.length === 0) return;
     
+    if (!confirm(`Êtes-vous sûr de vouloir supprimer ${selectedDeliveries.length} livraisons ?`)) return;
+
     try {
       for (const deliveryId of selectedDeliveries) {
         if (action === 'cancel') {
-          await apiAuthPut(`/test/shop/deliveries/${deliveryId}/cancel`, {});
+          // Use Delete as Cancel
+          await apiAuthDelete(`/deliveries/${deliveryId}`);
         }
       }
       
-      showToast(`${selectedDeliveries.length} livraisons ${action === 'cancel' ? 'annulées' : 'confirmées'}`, "success");
+      showToast(`${selectedDeliveries.length} livraisons supprimées`, "success");
       setSelectedDeliveries([]);
       
-      // Rafraîchir les données
-      const data = await apiAuthGet<ShopDelivery[]>("/test/shop/deliveries");
-      setDeliveries(data);
+      if(me?.shopId) fetchDeliveries(me.shopId);
     } catch (error) {
       console.error("Erreur action en lot:", error);
       showToast("Erreur lors de l'action en lot", "error");
     }
   };
 
-  const handleModifyDelivery = async (deliveryId: string) => {
-    try {
-      const delivery = deliveries.find(d => d.id === deliveryId);
-      if (!delivery) {
-        showToast("Livraison introuvable", "error");
-        return;
-      }
-      handleEditDelivery(delivery);
-    } catch (error: any) {
-      console.error("Error modifying delivery:", error);
-      showToast("Erreur lors de la modification de la livraison", "error");
-    }
-  };
-
   const handleCancelDelivery = async (deliveryId: string) => {
-    if (!confirm("Êtes-vous sûr de vouloir annuler cette livraison ?")) {
+    if (!confirm("Êtes-vous sûr de vouloir supprimer cette livraison ?")) {
       return;
     }
 
     try {
-      await apiAuthPut(`/test/shop/deliveries/${deliveryId}/cancel`, {});
+      await apiAuthDelete(`/deliveries/${deliveryId}`);
       
-      setDeliveries(prev => prev.map(delivery => 
-        delivery.id === deliveryId 
-          ? { ...delivery, status: 'cancelled' as const }
-          : delivery
-      ));
+      setDeliveries(prev => prev.filter(d => d.id !== deliveryId));
       
-      showToast("Livraison annulée avec succès", "success");
+      showToast("Livraison supprimée avec succès", "success");
     } catch (error: any) {
       console.error("Error cancelling delivery:", error);
-      showToast("Erreur lors de l'annulation de la livraison", "error");
+      showToast("Erreur lors de la suppression de la livraison", "error");
     }
   };
 
@@ -503,7 +502,7 @@ export default function ShopDeliveriesPage() {
                 <div className="ml-5 w-0 flex-1">
                   <dl>
                     <dt className="text-sm font-medium text-gray-500 truncate">
-                      Livrées
+                      Livrées (Passées)
                     </dt>
                     <dd className="text-lg font-medium text-gray-900">
                       {stats.byStatus.delivered || 0}
@@ -581,25 +580,6 @@ export default function ShopDeliveriesPage() {
                 </div>
               </div>
 
-              {/* Filtre par statut */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  📊 Statut
-                </label>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value as any)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-green-500 focus:border-green-500"
-                >
-                  <option value="all">Tous les statuts</option>
-                  <option value="scheduled">Programmées</option>
-                  <option value="confirmed">Confirmées</option>
-                  <option value="in_progress">En cours</option>
-                  <option value="delivered">Livrées</option>
-                  <option value="cancelled">Annulées</option>
-                </select>
-              </div>
-
               {/* Tri */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -614,7 +594,6 @@ export default function ShopDeliveriesPage() {
                     <option value="date">Date</option>
                     <option value="amount">Montant</option>
                     <option value="client">Client</option>
-                    <option value="status">Statut</option>
                   </select>
                   <button
                     onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
@@ -712,7 +691,7 @@ export default function ShopDeliveriesPage() {
                   onClick={() => handleBulkAction('cancel')}
                   className="px-3 py-1 bg-red-600 text-white text-sm rounded-md hover:bg-red-700"
                 >
-                  Annuler sélectionnées
+                  Supprimer sélectionnées
                 </button>
               </div>
               <button
@@ -821,10 +800,10 @@ export default function ShopDeliveriesPage() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
-                        {formatDate(delivery.date)}
+                        {formatDate(delivery.startWindow)}
                       </div>
                       <div className="text-sm text-gray-500">
-                        {formatTime(delivery.date)}
+                        {formatTime(delivery.startWindow)}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -835,7 +814,7 @@ export default function ShopDeliveriesPage() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       <div className="font-medium">
-                        {delivery.totalAmount.toFixed(2)} CHF
+                        {delivery.amount.toFixed(2)} CHF
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -844,29 +823,19 @@ export default function ShopDeliveriesPage() {
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                      <button 
-                        onClick={() => handleEditDelivery(delivery)}
-                        disabled={new Date(delivery.date) < new Date() || delivery.status === 'delivered' || delivery.status === 'cancelled'}
-                        className="text-blue-600 hover:text-blue-900 text-xs disabled:text-gray-400 disabled:cursor-not-allowed mr-2"
-                      >
-                        ✏️ Modifier
-                      </button>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex space-x-2">
                         <button 
                           onClick={() => handleModifyDelivery(delivery.id)}
-                          disabled={editingDelivery?.id === delivery.id || delivery.status === 'delivered' || delivery.status === 'cancelled'}
+                          disabled={editingDelivery?.id === delivery.id}
                           className="text-blue-600 hover:text-blue-900 text-xs disabled:text-gray-400 disabled:cursor-not-allowed"
                         >
                           {editingDelivery?.id === delivery.id ? "Modification..." : "✏️ Modifier"}
                         </button>
                         <button 
                           onClick={() => handleCancelDelivery(delivery.id)}
-                          disabled={delivery.status === 'delivered' || delivery.status === 'cancelled'}
                           className="text-red-600 hover:text-red-900 text-xs disabled:text-gray-400 disabled:cursor-not-allowed"
                         >
-                          🗑️ Annuler
+                          🗑️ Supprimer
                         </button>
                       </div>
                     </td>

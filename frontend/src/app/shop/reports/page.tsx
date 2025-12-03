@@ -3,8 +3,10 @@ import { useEffect, useState } from "react";
 import ShopLayout from "@/components/ShopLayout";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import LoadingSpinner from "@/components/LoadingSpinner";
-import { apiAuthGet } from "@/lib/api";
+import { apiAuthGet, getMe, type Me } from "@/lib/api";
 import { showToast } from "@/lib/toast";
+import { auth } from "@/lib/firebase";
+import { getIdToken, onAuthStateChanged } from "firebase/auth";
 
 type ShopReportData = {
   period: string;
@@ -38,18 +40,40 @@ export default function ShopReportsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedPeriod, setSelectedPeriod] = useState<'week' | 'month' | 'quarter' | 'year'>('month');
+  const [me, setMe] = useState<Me | null>(null);
 
   useEffect(() => {
-    const fetchReportData = async () => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user) { setMe(null); setLoading(false); return; }
+      try {
+        const t = await getIdToken(user, true);
+        const m = await getMe(t);
+        setMe(m);
+        if (m.shopId) {
+            fetchReportData(m.shopId);
+        } else {
+            setLoading(false);
+        }
+      } catch (e: any) {
+        setMe(null);
+        setLoading(false);
+      }
+    });
+    return () => unsub();
+  }, [selectedPeriod]); // Re-run if period changes, but we need shopId first.
+  // Actually, dependency on selectedPeriod is tricky if we need shopId.
+  // Better: separate fetch function and call it when both exist.
+  
+  // Refactor: separate effect for auth and data
+  
+  const fetchReportData = async (shopId: string) => {
       try {
         setLoading(true);
-        const [periodData, allDeliveriesData] = await Promise.all([
-          apiAuthGet<ShopReportData>(`/test/shop/reports/${selectedPeriod}`),
-          apiAuthGet<any[]>("/test/shop/deliveries")
-        ]);
+        // Fetch all deliveries to calculate reports locally
+        const res = await apiAuthGet<{deliveries: any[]}>(`/deliveries?shopId=${shopId}&limit=2000`);
         
         // Calculer les rapports en temps réel
-        const calculatedReports = calculateRealTimeReports(allDeliveriesData, selectedPeriod);
+        const calculatedReports = calculateRealTimeReports(res.deliveries, selectedPeriod);
         setReportData(calculatedReports);
       } catch (err: any) {
         console.error("Error fetching report data:", err);
@@ -57,9 +81,7 @@ export default function ShopReportsPage() {
       } finally {
         setLoading(false);
       }
-    };
-    fetchReportData();
-  }, [selectedPeriod]);
+  };
 
   const calculateRealTimeReports = (deliveries: any[], period: string): ShopReportData => {
     const now = new Date();
@@ -84,23 +106,25 @@ export default function ShopReportsPage() {
     }
 
     // Filtrer les livraisons selon la période
-    const periodDeliveries = deliveries.filter(d => 
-      new Date(d.date) >= startDate
-    );
+    const periodDeliveries = deliveries.filter(d => {
+        if (!d.startWindow) return false;
+        return new Date(d.startWindow) >= startDate;
+    });
 
     // Calculs de base
     const totalDeliveries = periodDeliveries.length;
-    const totalRevenue = periodDeliveries.reduce((sum, d) => sum + d.totalAmount, 0);
+    // Fix: use amount from backend
+    const totalRevenue = periodDeliveries.reduce((sum, d) => sum + (d.amount || 0), 0);
     const averageOrderValue = totalDeliveries > 0 ? totalRevenue / totalDeliveries : 0;
 
     // Livraisons par jour
     const deliveriesByDay = periodDeliveries.reduce((acc, d) => {
-      const date = new Date(d.date).toISOString().split('T')[0];
+      const date = new Date(d.startWindow).toISOString().split('T')[0];
       if (!acc[date]) {
         acc[date] = { deliveries: 0, revenue: 0 };
       }
       acc[date].deliveries += 1;
-      acc[date].revenue += d.totalAmount;
+      acc[date].revenue += (d.amount || 0);
       return acc;
     }, {} as Record<string, { deliveries: number; revenue: number }>);
 
@@ -110,7 +134,8 @@ export default function ShopReportsPage() {
 
     // Livraisons par statut
     const statusStats = periodDeliveries.reduce((acc, d) => {
-      acc[d.status] = (acc[d.status] || 0) + 1;
+      const status = d.status || (new Date(d.startWindow) < new Date() ? 'delivered' : 'scheduled');
+      acc[status] = (acc[status] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
 
@@ -124,12 +149,12 @@ export default function ShopReportsPage() {
 
     // Top clients
     const clientStats = periodDeliveries.reduce((acc, d) => {
-      const clientName = d.clientName;
+      const clientName = d.clientName || d.clientId || "Inconnu";
       if (!acc[clientName]) {
         acc[clientName] = { deliveries: 0, revenue: 0 };
       }
       acc[clientName].deliveries += 1;
-      acc[clientName].revenue += d.totalAmount;
+      acc[clientName].revenue += (d.amount || 0);
       return acc;
     }, {} as Record<string, { deliveries: number; revenue: number }>);
 
@@ -140,11 +165,11 @@ export default function ShopReportsPage() {
 
     // Revenus par mois
     const monthlyStats = periodDeliveries.reduce((acc, d) => {
-      const month = new Date(d.date).toLocaleDateString('fr-CH', { month: 'long', year: 'numeric' });
+      const month = new Date(d.startWindow).toLocaleDateString('fr-CH', { month: 'long', year: 'numeric' });
       if (!acc[month]) {
         acc[month] = { revenue: 0, deliveries: 0 };
       }
-      acc[month].revenue += d.totalAmount;
+      acc[month].revenue += (d.amount || 0);
       acc[month].deliveries += 1;
       return acc;
     }, {} as Record<string, { revenue: number; deliveries: number }>);
@@ -164,6 +189,7 @@ export default function ShopReportsPage() {
       revenueByMonth
     };
   };
+
 
   const getStatusText = (status: string) => {
     switch (status) {

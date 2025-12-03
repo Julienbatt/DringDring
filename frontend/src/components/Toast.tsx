@@ -13,26 +13,30 @@ export default function ToastContainer() {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   useEffect(() => {
-    const handleToast = (toast: Omit<Toast, 'id'>) => {
-      const id = Math.random().toString(36).substr(2, 9);
+    const handleToast = (toast: Omit<Toast, "id">) => {
+      const id = Math.random().toString(36).substring(2, 11);
       const newToast = { ...toast, id };
-      
-      setToasts(prev => [...prev, newToast]);
-      
-      // Auto remove after duration
-      const duration = toast.duration || 5000;
-      setTimeout(() => {
-        setToasts(prev => prev.filter(t => t.id !== id));
+
+      setToasts((prev) => [...prev, newToast]);
+
+      const duration = toast.duration ?? 5000;
+      const timeout = window.setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
       }, duration);
+
+      return () => window.clearTimeout(timeout);
     };
 
-    // Listen for toast events
-    window.addEventListener('toast', (e: any) => {
-      handleToast(e.detail);
-    });
+    const listener = (event: Event) => {
+      const detail = (event as CustomEvent<Omit<Toast, "id">>).detail;
+      if (detail) {
+        handleToast(detail);
+      }
+    };
 
+    window.addEventListener("toast", listener as EventListener);
     return () => {
-      window.removeEventListener('toast', handleToast);
+      window.removeEventListener("toast", listener as EventListener);
     };
   }, []);
 

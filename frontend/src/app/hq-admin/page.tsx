@@ -1,8 +1,13 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import HQAdminLayout from "@/components/HQAdminLayout";
-import LoadingSpinner from "@/components/LoadingSpinner";
 import { apiAuthGet } from "@/lib/api";
+import { useProtectedRoute } from "@/hooks/useProtectedRoute";
+import { PageLoader, PageError } from "@/components/loading/PageState";
+import { StatsCard } from "@/components/dashboard/StatsCard";
+import { ActionCard } from "@/components/dashboard/ActionCard";
+import { RegionList } from "@/components/dashboard/RegionList";
+import { formatCurrency, formatDateLabel } from "@/lib/formatters";
 
 type HQStats = {
   totalShops: number;
@@ -28,42 +33,44 @@ type RecentDelivery = {
   region: string;
 };
 
+const quickActions = [
+  { title: "Livraisons", description: "Vue consolidée", href: "/hq-admin/deliveries", icon: "🚚", tone: "purple" as const },
+  { title: "Magasins", description: "Pilotage local", href: "/hq-admin/shops", icon: "🏪", tone: "green" as const },
+  { title: "Utilisateurs", description: "Responsables HQ", href: "/hq-admin/users", icon: "👤", tone: "blue" as const },
+  { title: "Rapports", description: "Exports et analyses", href: "/hq-admin/reports", icon: "📊", tone: "orange" as const },
+];
+
 export default function HQAdminDashboard() {
+  const { user, status } = useProtectedRoute({ redirectTo: "/login?role=hq-admin" });
   const [stats, setStats] = useState<HQStats | null>(null);
   const [recentDeliveries, setRecentDeliveries] = useState<RecentDelivery[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!user) return;
     const fetchData = async () => {
       try {
-        setLoading(true);
-        
-        // Fetch all data for real-time calculations
-        const [statsData, deliveriesData, shopsData] = await Promise.all([
-          apiAuthGet<HQStats>("/test/hq-admin/stats"),
+        setError(null);
+        const [deliveriesData, shopsData] = await Promise.all([
           apiAuthGet<any[]>("/test/hq-admin/deliveries"),
-          apiAuthGet<any[]>("/test/hq-admin/shops")
+          apiAuthGet<any[]>("/test/hq-admin/shops"),
         ]);
-        
-        // Calculate real-time statistics
-        const calculatedStats = calculateRealTimeStats(deliveriesData, shopsData);
-        setStats(calculatedStats);
-        
-        // Get recent deliveries from all data
-        const recentDeliveries = getRecentDeliveries(deliveriesData);
-        setRecentDeliveries(recentDeliveries);
-        
+
+        setStats(calculateRealTimeStats(deliveriesData, shopsData));
+        setRecentDeliveries(getRecentDeliveries(deliveriesData));
       } catch (err: any) {
         console.error("Error fetching HQ admin data:", err);
-        setError(err.message || "Une erreur est survenue lors du chargement des données.");
-      } finally {
-        setLoading(false);
+        setError("Impossible de charger le tableau de bord HQ.");
       }
     };
 
     fetchData();
-  }, []);
+  }, [user]);
+
+  const avgRevenuePerShop = useMemo(() => {
+    if (!stats?.totalRevenue || !stats?.totalShops) return 0;
+    return Math.round(stats.totalRevenue / stats.totalShops);
+  }, [stats]);
 
   const calculateRealTimeStats = (deliveries: any[], shops: any[]): HQStats => {
     const now = new Date();
@@ -137,36 +144,22 @@ export default function HQAdminDashboard() {
       }));
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('fr-CH', {
-      style: 'currency',
-      currency: 'CHF'
-    }).format(amount);
-  };
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('fr-CH', {
-      day: 'numeric',
-      month: 'short',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  if (loading) {
+  if (status === "loading" || status === "redirecting") {
     return (
       <HQAdminLayout>
-        <LoadingSpinner text="Chargement du dashboard HQ Admin..." />
+        <PageLoader title="Chargement du dashboard HQ Admin..." />
       </HQAdminLayout>
     );
+  }
+
+  if (!user) {
+    return null;
   }
 
   if (error) {
     return (
       <HQAdminLayout>
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-          <p>{error}</p>
-        </div>
+        <PageError title="Erreur" description={error} />
       </HQAdminLayout>
     );
   }
@@ -183,111 +176,53 @@ export default function HQAdminDashboard() {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <span className="text-2xl">🏪</span>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">
-                      Total Magasins
-                    </dt>
-                    <dd className="text-lg font-medium text-gray-900">
-                      {stats?.totalShops || 0}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <span className="text-2xl">🚚</span>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">
-                      Livraisons Aujourd'hui
-                    </dt>
-                    <dd className="text-lg font-medium text-gray-900">
-                      {stats?.todayDeliveries || 0}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <span className="text-2xl">💰</span>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">
-                      Revenus Totaux
-                    </dt>
-                    <dd className="text-lg font-medium text-gray-900">
-                      {formatCurrency(stats?.totalRevenue || 0)}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <span className="text-2xl">✅</span>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">
-                      Magasins Actifs
-                    </dt>
-                    <dd className="text-lg font-medium text-gray-900">
-                      {stats?.activeShops || 0}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatsCard label="Magasins" value={stats?.totalShops} icon="🏪" tone="blue" />
+          <StatsCard label="Livraisons aujourd'hui" value={stats?.todayDeliveries} icon="🚚" tone="green" />
+          <StatsCard label="Revenus cumulés" value={stats?.totalRevenue} icon="💰" tone="purple" variant="currency" />
+          <StatsCard label="Magasins actifs" value={stats?.activeShops} icon="✅" tone="orange" />
         </div>
+
+        {/* Quick actions */}
+        <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {quickActions.map((action) => (
+            <ActionCard key={action.title} {...action} />
+          ))}
+        </section>
+
+        {/* Highlights */}
+        <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <div className="rounded-2xl border border-green-100 bg-gradient-to-r from-green-50 to-green-100 p-6">
+            <p className="text-xs font-semibold uppercase tracking-wide text-green-700">Revenus / magasin</p>
+            <p className="mt-2 text-3xl font-bold text-green-900">{formatCurrency(avgRevenuePerShop)}</p>
+            <p className="text-xs text-green-800">Moyenne sur l&apos;ensemble du réseau</p>
+          </div>
+          <div className="rounded-2xl border border-blue-100 bg-blue-50 p-6">
+            <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Livraisons totales</p>
+            <p className="mt-2 text-3xl font-bold text-blue-900">{stats?.totalDeliveries ?? 0}</p>
+            <p className="text-xs text-blue-700">Depuis le début du mois</p>
+          </div>
+          <div className="rounded-2xl border border-purple-100 bg-purple-50 p-6">
+            <p className="text-xs font-semibold uppercase tracking-wide text-purple-700">Réseau actif</p>
+            <p className="mt-2 text-3xl font-bold text-purple-900">
+              {stats?.regions ? stats.regions.length : 0} régions
+            </p>
+            <p className="text-xs text-purple-800">Performance consolidée</p>
+          </div>
+        </section>
 
         {/* Regions Overview */}
         {stats?.regions && stats.regions.length > 0 && (
-          <div className="bg-white shadow rounded-lg">
-            <div className="px-4 py-5 sm:p-6">
-              <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">
-                Performance par Région
-              </h3>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {stats.regions.map((region, index) => (
-                  <div key={index} className="border border-gray-200 rounded-lg p-4">
-                    <h4 className="text-sm font-medium text-gray-900 mb-2">
-                      {region.name}
-                    </h4>
-                    <div className="space-y-1 text-sm text-gray-600">
-                      <p>Magasins: {region.shops}</p>
-                      <p>Livraisons: {region.deliveries}</p>
-                      <p>Revenus: {formatCurrency(region.revenue)}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+          <RegionList
+            title="Performance par région"
+            regions={stats.regions.map((region, idx) => ({
+              id: String(idx),
+              name: region.name,
+              shops: region.shops,
+              deliveries: region.deliveries,
+              revenue: region.revenue,
+            }))}
+          />
         )}
 
         {/* Recent Deliveries */}
@@ -332,7 +267,7 @@ export default function HQAdminDashboard() {
                           {delivery.clientName}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {formatDate(delivery.date)}
+                          {formatDateLabel(delivery.date)}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           {formatCurrency(delivery.amount)}

@@ -1,9 +1,10 @@
 "use client";
 import { useEffect, useState } from "react";
 import HQAdminLayout from "@/components/HQAdminLayout";
-import LoadingSpinner from "@/components/LoadingSpinner";
 import { apiAuthGet, apiAuthPut } from "@/lib/api";
 import { showToast } from "@/lib/toast";
+import { PageLoader, PageError } from "@/components/loading/PageState";
+import { useProtectedRoute } from "@/hooks/useProtectedRoute";
 
 type HQAdminProfile = {
   id: string;
@@ -26,8 +27,8 @@ type HQAdminProfile = {
 };
 
 export default function HQAdminProfilePage() {
+  const { user, status } = useProtectedRoute({ redirectTo: "/login?role=hq-admin" });
   const [profile, setProfile] = useState<HQAdminProfile | null>(null);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -46,31 +47,30 @@ export default function HQAdminProfilePage() {
   });
 
   useEffect(() => {
+    if (!user) return;
     const fetchProfile = async () => {
       try {
-        setLoading(true);
+        setError(null);
         const data = await apiAuthGet<HQAdminProfile>("/test/hq-admin/profile");
         setProfile(data);
         setFormData({
           name: data.name,
           email: data.email,
-          phone: data.phone || '',
+          phone: data.phone || "",
           region: data.region,
           company: data.company,
           language: data.preferences.language,
           timezone: data.preferences.timezone,
           notifications: data.preferences.notifications,
-          theme: data.preferences.theme
+          theme: data.preferences.theme,
         });
       } catch (err: any) {
         console.error("Error fetching profile:", err);
         setError(err.message || "Une erreur est survenue lors du chargement du profil.");
-      } finally {
-        setLoading(false);
       }
     };
     fetchProfile();
-  }, []);
+  }, [user]);
 
   const handleSave = async () => {
     try {
@@ -124,20 +124,22 @@ export default function HQAdminProfilePage() {
     });
   };
 
-  if (loading) {
+  if (status === "loading" || status === "redirecting") {
     return (
       <HQAdminLayout>
-        <LoadingSpinner text="Chargement du profil..." />
+        <PageLoader title="Chargement du profil..." />
       </HQAdminLayout>
     );
+  }
+
+  if (!user) {
+    return null;
   }
 
   if (error) {
     return (
       <HQAdminLayout>
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-          <p>{error}</p>
-        </div>
+        <PageError title="Erreur" description={error} />
       </HQAdminLayout>
     );
   }

@@ -1,8 +1,11 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import HQAdminLayout from "@/components/HQAdminLayout";
-import LoadingSpinner from "@/components/LoadingSpinner";
 import { apiAuthGet } from "@/lib/api";
+import { useProtectedRoute } from "@/hooks/useProtectedRoute";
+import { PageLoader, PageError } from "@/components/loading/PageState";
+import { StatsCard } from "@/components/dashboard/StatsCard";
+import { ActionCard } from "@/components/dashboard/ActionCard";
 
 type HQUser = {
   id: string;
@@ -17,28 +20,34 @@ type HQUser = {
   permissions: string[];
 };
 
+const actionCards = [
+  { title: "Inviter un utilisateur", description: "Envoyer une invitation email", icon: "✉️", tone: "purple" as const },
+  { title: "Attribuer un rôle", description: "Gestion fine des permissions", icon: "🛡️", tone: "blue" as const },
+  { title: "Exporter la liste", description: "CSV / Excel en un clic", icon: "📤", tone: "green" as const },
+  { title: "Review sécurité", description: "Vérifier les connexions", icon: "🔐", tone: "orange" as const },
+];
+
 export default function HQAdminUsersPage() {
+  const { user, status } = useProtectedRoute({ redirectTo: "/login?role=hq-admin" });
   const [users, setUsers] = useState<HQUser[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<'all' | 'active' | 'inactive' | 'pending'>('all');
-  const [roleFilter, setRoleFilter] = useState<'all' | 'shop_manager' | 'shop_employee' | 'hq_admin'>('all');
+  const [filter, setFilter] = useState<"all" | "active" | "inactive" | "pending">("all");
+  const [roleFilter, setRoleFilter] = useState<"all" | "shop_manager" | "shop_employee" | "hq_admin">("all");
 
   useEffect(() => {
+    if (!user) return;
     const fetchUsers = async () => {
       try {
-        setLoading(true);
+        setError(null);
         const data = await apiAuthGet<HQUser[]>("/test/hq-admin/users");
         setUsers(data);
       } catch (err: any) {
         console.error("Error fetching HQ users:", err);
-        setError(err.message || "Une erreur est survenue lors du chargement des utilisateurs.");
-      } finally {
-        setLoading(false);
+        setError("Impossible de charger les utilisateurs.");
       }
     };
     fetchUsers();
-  }, []);
+  }, [user]);
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('fr-CH', {
@@ -108,20 +117,30 @@ export default function HQAdminUsersPage() {
     return statusMatch && roleMatch;
   });
 
-  if (loading) {
+  const stats = useMemo(() => {
+    const total = users.length;
+    const active = users.filter((u) => u.status === "active").length;
+    const pending = users.filter((u) => u.status === "pending").length;
+    const managers = users.filter((u) => u.role === "shop_manager").length;
+    return { total, active, pending, managers };
+  }, [users]);
+
+  if (status === "loading" || status === "redirecting") {
     return (
       <HQAdminLayout>
-        <LoadingSpinner text="Chargement des utilisateurs..." />
+        <PageLoader title="Chargement des utilisateurs..." />
       </HQAdminLayout>
     );
+  }
+
+  if (!user) {
+    return null;
   }
 
   if (error) {
     return (
       <HQAdminLayout>
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-          <p>{error}</p>
-        </div>
+        <PageError title="Erreur" description={error} />
       </HQAdminLayout>
     );
   }
@@ -143,87 +162,19 @@ export default function HQAdminUsersPage() {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-4">
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <span className="text-2xl">👥</span>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">
-                      Total Utilisateurs
-                    </dt>
-                    <dd className="text-lg font-medium text-gray-900">
-                      {users.length}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <span className="text-2xl">✅</span>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">
-                      Actifs
-                    </dt>
-                    <dd className="text-lg font-medium text-gray-900">
-                      {users.filter(u => u.status === 'active').length}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <span className="text-2xl">⏳</span>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">
-                      En attente
-                    </dt>
-                    <dd className="text-lg font-medium text-gray-900">
-                      {users.filter(u => u.status === 'pending').length}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <span className="text-2xl">👨‍💼</span>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">
-                      Gérants
-                    </dt>
-                    <dd className="text-lg font-medium text-gray-900">
-                      {users.filter(u => u.role === 'shop_manager').length}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatsCard label="Total utilisateurs" value={stats.total} icon="👥" tone="blue" />
+          <StatsCard label="Actifs" value={stats.active} icon="✅" tone="green" />
+          <StatsCard label="En attente" value={stats.pending} icon="⏳" tone="orange" />
+          <StatsCard label="Gérants" value={stats.managers} icon="👨‍💼" tone="purple" />
         </div>
+
+        {/* Actions */}
+        <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {actionCards.map((action) => (
+            <ActionCard key={action.title} {...action} />
+          ))}
+        </section>
 
         {/* Filters */}
         <div className="bg-white shadow rounded-lg">
