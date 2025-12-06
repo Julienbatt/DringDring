@@ -5,8 +5,19 @@ import { auth } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { showToast } from "@/lib/toast";
+import PausedScreen from "@/components/PausedScreen";
+import { ENABLE_REGIONAL_FEATURES } from "@/lib/featureFlags";
 
 export default function RegionalLoginPage() {
+  if (!ENABLE_REGIONAL_FEATURES) {
+    return (
+      <PausedScreen
+        title="Connexion admin régional en pause"
+        description="Les accès régionaux seront de nouveau ouverts dès que les APIs correspondantes seront prêtes."
+      />
+    );
+  }
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);

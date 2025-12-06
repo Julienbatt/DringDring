@@ -11,7 +11,7 @@ type Shortcut = {
 };
 
 type KeyboardShortcutsProps = {
-  role: string;
+  role: 'shop' | 'client';
   onNavigate?: (path: string) => void;
 };
 
@@ -57,35 +57,35 @@ export default function KeyboardShortcuts({ role, onNavigate }: KeyboardShortcut
     ];
 
     // Raccourcis spécifiques au rôle
-    const roleSpecificShortcuts: Record<string, Shortcut[]> = {
+    const roleSpecificShortcuts: Record<'client' | 'shop', Shortcut[]> = {
       client: [
         {
           key: 'Ctrl + N',
           description: 'Nouvelle livraison',
           action: () => onNavigate?.('/delivery/new'),
           category: 'Actions',
-          icon: '➕'
+          icon: '?z'
         },
         {
           key: 'Ctrl + D',
           description: 'Mes livraisons',
           action: () => onNavigate?.('/client/deliveries'),
           category: 'Navigation',
-          icon: '🚚'
+          icon: 'dYss'
         },
         {
           key: 'Ctrl + S',
           description: 'Mes statistiques',
           action: () => onNavigate?.('/client/stats'),
           category: 'Navigation',
-          icon: '📊'
+          icon: 'dY"S'
         },
         {
           key: 'Ctrl + P',
           description: 'Mon profil',
           action: () => onNavigate?.('/client/profile'),
           category: 'Navigation',
-          icon: '👤'
+          icon: 'dY`'
         }
       ],
       shop: [
@@ -94,115 +94,31 @@ export default function KeyboardShortcuts({ role, onNavigate }: KeyboardShortcut
           description: 'Nouvelle livraison',
           action: () => onNavigate?.('/delivery/new'),
           category: 'Actions',
-          icon: '➕'
+          icon: '?z'
         },
         {
           key: 'Ctrl + D',
           description: 'Mes livraisons',
           action: () => onNavigate?.('/shop/deliveries'),
           category: 'Navigation',
-          icon: '🚚'
+          icon: 'dYss'
         },
         {
           key: 'Ctrl + R',
           description: 'Rapports',
           action: () => onNavigate?.('/shop/reports'),
           category: 'Navigation',
-          icon: '📊'
+          icon: 'dY"S'
         },
         {
           key: 'Ctrl + P',
           description: 'Profil magasin',
           action: () => onNavigate?.('/shop/profile'),
           category: 'Navigation',
-          icon: '🏪'
-        }
-      ],
-      hq_admin: [
-        {
-          key: 'Ctrl + S',
-          description: 'Magasins',
-          action: () => onNavigate?.('/hq-admin/shops'),
-          category: 'Navigation',
-          icon: '🏪'
-        },
-        {
-          key: 'Ctrl + D',
-          description: 'Livraisons',
-          action: () => onNavigate?.('/hq-admin/deliveries'),
-          category: 'Navigation',
-          icon: '🚚'
-        },
-        {
-          key: 'Ctrl + R',
-          description: 'Rapports',
-          action: () => onNavigate?.('/hq-admin/reports'),
-          category: 'Navigation',
-          icon: '📊'
-        },
-        {
-          key: 'Ctrl + U',
-          description: 'Utilisateurs',
-          action: () => onNavigate?.('/hq-admin/users'),
-          category: 'Navigation',
-          icon: '👥'
-        }
-      ],
-      regional: [
-        {
-          key: 'Ctrl + S',
-          description: 'Magasins régionaux',
-          action: () => onNavigate?.('/regional/shops'),
-          category: 'Navigation',
-          icon: '🏪'
-        },
-        {
-          key: 'Ctrl + T',
-          description: 'Configuration tarifs',
-          action: () => onNavigate?.('/regional/pricing'),
-          category: 'Configuration',
-          icon: '💰'
-        },
-        {
-          key: 'Ctrl + R',
-          description: 'Rapports régionaux',
-          action: () => onNavigate?.('/regional/reports'),
-          category: 'Navigation',
-          icon: '📊'
-        }
-      ],
-      super_admin: [
-        {
-          key: 'Ctrl + R',
-          description: 'Régions',
-          action: () => onNavigate?.('/super-admin/regions'),
-          category: 'Navigation',
-          icon: '🗺️'
-        },
-        {
-          key: 'Ctrl + S',
-          description: 'Tous les magasins',
-          action: () => onNavigate?.('/super-admin/shops'),
-          category: 'Navigation',
-          icon: '🏪'
-        },
-        {
-          key: 'Ctrl + U',
-          description: 'Tous les utilisateurs',
-          action: () => onNavigate?.('/super-admin/users'),
-          category: 'Navigation',
-          icon: '👥'
-        },
-        {
-          key: 'Ctrl + A',
-          description: 'Analytics globaux',
-          action: () => onNavigate?.('/super-admin/analytics'),
-          category: 'Navigation',
-          icon: '📈'
+          icon: 'dY?¦'
         }
       ]
     };
-
     const allShortcuts = [
       ...baseShortcuts,
       ...(roleSpecificShortcuts[role] || [])
@@ -246,34 +162,15 @@ export default function KeyboardShortcuts({ role, onNavigate }: KeyboardShortcut
             e.preventDefault();
             if (role === 'client') onNavigate?.('/client/stats');
             else if (role === 'shop') onNavigate?.('/shop/reports');
-            else if (role === 'hq_admin') onNavigate?.('/hq-admin/shops');
-            else if (role === 'regional') onNavigate?.('/regional/shops');
-            else if (role === 'super_admin') onNavigate?.('/super-admin/shops');
             break;
           case 'r':
             e.preventDefault();
             if (role === 'shop') onNavigate?.('/shop/reports');
-            else if (role === 'hq_admin') onNavigate?.('/hq-admin/reports');
-            else if (role === 'regional') onNavigate?.('/regional/reports');
-            else if (role === 'super_admin') onNavigate?.('/super-admin/regions');
             break;
           case 'p':
             e.preventDefault();
             if (role === 'client') onNavigate?.('/client/profile');
             else if (role === 'shop') onNavigate?.('/shop/profile');
-            break;
-          case 'u':
-            e.preventDefault();
-            if (role === 'hq_admin') onNavigate?.('/hq-admin/users');
-            else if (role === 'super_admin') onNavigate?.('/super-admin/users');
-            break;
-          case 't':
-            e.preventDefault();
-            if (role === 'regional') onNavigate?.('/regional/pricing');
-            break;
-          case 'a':
-            e.preventDefault();
-            if (role === 'super_admin') onNavigate?.('/super-admin/analytics');
             break;
         }
       }

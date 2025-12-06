@@ -82,35 +82,6 @@ const navigationItems: NavigationItem[] = [
     roles: ["client"]
   },
   
-  // Admin Navigation
-  {
-    name: "Dashboard HQ",
-    href: "/admin/hq",
-    icon: "🏢",
-    roles: ["admin", "hqAdmin"]
-  },
-  {
-    name: "Magasins",
-    href: "/admin/shops",
-    icon: "🏪",
-    roles: ["admin", "regionalAdmin", "hqAdmin"],
-    children: [
-      { name: "Nouveau magasin", href: "/admin/shops/new", icon: "➕", roles: ["admin"] },
-      { name: "Liste des magasins", href: "/admin/shops", icon: "📋", roles: ["admin", "regionalAdmin", "hqAdmin"] }
-    ]
-  },
-  {
-    name: "Utilisateurs",
-    href: "/admin/users",
-    icon: "👥",
-    roles: ["admin"]
-  },
-  {
-    name: "Rapports Globaux",
-    href: "/admin/reports",
-    icon: "📊",
-    roles: ["admin", "hqAdmin"]
-  }
 ];
 
 export default function Navigation() {

@@ -27,21 +27,21 @@ type ShopStats = {
   lastDelivery: string | null;
 };
 
-type UpcomingDelivery = {
+type DeliveryRecord = {
   id: string;
-  clientName: string;
-  address: string;
-  date: string;
-  time: string;
-  status: string;
+  clientId?: string;
+  clientName?: string;
+  address?: string;
+  startWindow: string;
   bags: number;
-  totalAmount: number;
+  status: string;
+  amount?: number;
 };
 
 export default function ShopMainPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [stats, setStats] = useState<ShopStats | null>(null);
-  const [upcoming, setUpcoming] = useState<UpcomingDelivery[]>([]);
+  const [upcoming, setUpcoming] = useState<DeliveryRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -73,16 +73,15 @@ export default function ShopMainPage() {
   const loadShopData = async () => {
     setLoading(true);
     try {
-      const [statsData, upcomingData, allDeliveriesData] = await Promise.all([
-        apiAuthGet<ShopStats>("/test/shop/stats"),
-        apiAuthGet<UpcomingDelivery[]>("/test/shop/deliveries/upcoming"),
-        apiAuthGet<any[]>("/test/shop/deliveries")
-      ]);
-      
-      // Calculer les statistiques en temps réel
-      const calculatedStats = calculateRealTimeStats(allDeliveriesData);
+      const deliveriesResp = await apiAuthGet<{
+        deliveries: DeliveryRecord[];
+        hasMore: boolean;
+        nextCursor?: string | null;
+      }>("/deliveries?limit=200");
+      const deliveries = deliveriesResp.deliveries || [];
+      const calculatedStats = calculateRealTimeStats(deliveries);
       setStats(calculatedStats);
-      setUpcoming(upcomingData);
+      setUpcoming(getUpcomingDeliveries(deliveries));
     } catch (error: any) {
       console.error("Erreur chargement magasin:", error);
     } finally {
@@ -90,45 +89,50 @@ export default function ShopMainPage() {
     }
   };
 
-  const calculateRealTimeStats = (deliveries: any[]): ShopStats => {
+  const calculateRealTimeStats = (deliveries: DeliveryRecord[]): ShopStats => {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     
     // Livraisons d'aujourd'hui
-    const todayDeliveries = deliveries.filter(d => {
-      const deliveryDate = new Date(d.date);
-      return deliveryDate >= today && deliveryDate < new Date(today.getTime() + 24 * 60 * 60 * 1000);
+    const todayDeliveries = deliveries.filter((d) => {
+      const dt = new Date(d.startWindow);
+      return dt >= today && dt < new Date(today.getTime() + 24 * 60 * 60 * 1000);
     }).length;
-    
-    // Livraisons du mois
-    const thisMonthDeliveries = deliveries.filter(d => 
-      new Date(d.date) >= thisMonth
-    ).length;
-    
-    // Chiffre d'affaires du mois
+
+    const thisMonthDeliveries = deliveries.filter((d) => {
+      const dt = new Date(d.startWindow);
+      return dt >= thisMonth;
+    }).length;
+
     const monthlyRevenue = deliveries
-      .filter(d => new Date(d.date) >= thisMonth)
-      .reduce((sum, d) => sum + d.totalAmount, 0);
-    
-    // Chiffre d'affaires total
-    const totalRevenue = deliveries.reduce((sum, d) => sum + d.totalAmount, 0);
-    
-    // Moyenne des commandes
-    const averageOrderValue = deliveries.length > 0 ? totalRevenue / deliveries.length : 0;
-    
-    // Clients actifs (uniques)
-    const uniqueClients = new Set(deliveries.map(d => d.clientId)).size;
-    
-    // Livraisons à venir
-    const upcomingDeliveries = deliveries.filter(d => 
-      new Date(d.date) > now && d.status !== 'delivered' && d.status !== 'cancelled'
-    ).length;
-    
-    // Dernière livraison
-    const lastDelivery = deliveries.length > 0 ? 
-      deliveries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0].date : 
-      null;
+      .filter((d) => new Date(d.startWindow) >= thisMonth)
+      .reduce((sum, d) => sum + (d.amount || 0), 0);
+
+    const totalRevenue = deliveries.reduce(
+      (sum, d) => sum + (d.amount || 0),
+      0
+    );
+
+    const averageOrderValue =
+      deliveries.length > 0 ? totalRevenue / deliveries.length : 0;
+
+    const uniqueClients = new Set(
+      deliveries.map((d) => d.clientId).filter(Boolean)
+    ).size;
+
+    const upcomingDeliveries = deliveries.filter((d) => {
+      const dt = new Date(d.startWindow);
+      return (
+        dt > now && d.status !== "delivered" && d.status !== "cancelled"
+      );
+    }).length;
+
+    const sorted = [...deliveries].sort(
+      (a, b) =>
+        new Date(b.startWindow).getTime() - new Date(a.startWindow).getTime()
+    );
+    const lastDelivery = sorted.length ? sorted[0].startWindow : null;
 
     return {
       todayDeliveries,
@@ -139,8 +143,24 @@ export default function ShopMainPage() {
       totalRevenue,
       averageOrderValue: Math.round(averageOrderValue * 100) / 100,
       upcomingDeliveries,
-      lastDelivery
+      lastDelivery,
     };
+  };
+
+  const getUpcomingDeliveries = (deliveries: DeliveryRecord[]) => {
+    const now = new Date();
+    return deliveries
+      .filter((d) => {
+        const dt = new Date(d.startWindow);
+        return (
+          dt > now && d.status !== "delivered" && d.status !== "cancelled"
+        );
+      })
+      .sort(
+        (a, b) =>
+          new Date(a.startWindow).getTime() - new Date(b.startWindow).getTime()
+      )
+      .slice(0, 5);
   };
 
   if (loading) {

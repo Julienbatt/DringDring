@@ -5,8 +5,19 @@ import { auth } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { showToast } from "@/lib/toast";
+import PausedScreen from "@/components/PausedScreen";
+import { ENABLE_SUPER_ADMIN_FEATURES } from "@/lib/featureFlags";
 
 export default function AdminLoginPage() {
+  if (!ENABLE_SUPER_ADMIN_FEATURES) {
+    return (
+      <PausedScreen
+        title="Connexion Admin en pause"
+        description="Les accès administrateur seront rouverts dès que la nouvelle API d’administration sera disponible."
+      />
+    );
+  }
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);

@@ -8,6 +8,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { apiAuthGet } from "@/lib/api";
 import LoadingSpinner from "@/components/LoadingSpinner";
+import PausedScreen from "@/components/PausedScreen";
+import { ENABLE_REGIONAL_FEATURES } from "@/lib/featureFlags";
 
 type RegionalStats = {
   totalShops: number;
@@ -29,6 +31,15 @@ type Shop = {
 };
 
 export default function RegionalAdminPage() {
+  if (!ENABLE_REGIONAL_FEATURES) {
+    return (
+      <PausedScreen
+        title="Espace Régional en pause"
+        description="La console régionale sera activée plus tard, une fois les APIs prêtes. Merci pour ta patience."
+      />
+    );
+  }
+
   const [stats, setStats] = useState<RegionalStats | null>(null);
   const [shops, setShops] = useState<Shop[]>([]);
   const [loading, setLoading] = useState(true);
@@ -444,4 +455,3 @@ export default function RegionalAdminPage() {
     </Layout>
   );
 }
-

@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import HQAdminLayout from "@/components/HQAdminLayout";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import { apiAuthGet } from "@/lib/api";
+import PausedScreen from "@/components/PausedScreen";
+import { ENABLE_HQ_FEATURES } from "@/lib/featureFlags";
 
 type ReportData = {
   period: string;
@@ -27,6 +29,15 @@ type ReportData = {
 };
 
 export default function HQAdminReportsPage() {
+  if (!ENABLE_HQ_FEATURES) {
+    return (
+      <PausedScreen
+        title="Rapports HQ Admin en pause"
+        description="Les rapports inter-magasins seront disponibles dès que les APIs seront prêtes."
+      />
+    );
+  }
+
   const [reportData, setReportData] = useState<ReportData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -424,4 +435,3 @@ export default function HQAdminReportsPage() {
     </HQAdminLayout>
   );
 }
-

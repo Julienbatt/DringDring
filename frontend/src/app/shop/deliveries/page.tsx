@@ -3,22 +3,53 @@ import { useEffect, useState, useMemo } from "react";
 import ShopLayout from "@/components/ShopLayout";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import LoadingSpinner from "@/components/LoadingSpinner";
-import { apiAuthGet, apiAuthPut } from "@/lib/api";
+import { apiAuthDelete, apiAuthGet, apiAuthPut } from "@/lib/api";
 import { showToast } from "@/lib/toast";
 import Link from "next/link";
 import DeliveryEditModal from "@/components/DeliveryEditModal";
 
 type ShopDelivery = {
   id: string;
+  shopId?: string;
+  clientId?: string;
   date: string;
   timeSlot: string;
   clientName: string;
-  clientAddress: string;
+  clientAddress?: string;
   bags: number;
-  status: 'scheduled' | 'confirmed' | 'in_progress' | 'delivered' | 'cancelled';
-  totalAmount: number;
+  status: "scheduled" | "confirmed" | "in_progress" | "delivered" | "cancelled";
+  totalAmount?: number;
   notes?: string;
   createdAt: string;
+  employee?: string;
+  sector?: string;
+  ticketNo?: string;
+  raw: DeliveryApi;
+};
+
+type DeliveryApi = {
+  id: string;
+  shopId?: string;
+  clientId: string;
+  employee: string;
+  sector?: string;
+  ticketNo?: string;
+  amount?: number;
+  today: boolean;
+  startWindow: string;
+  bags: number;
+  courierNotes?: string;
+  status?: ShopDelivery["status"];
+  createdAt?: string;
+  updatedAt?: string;
+  clientName?: string;
+  clientAddress?: string;
+};
+
+type DeliveriesResponse = {
+  deliveries: DeliveryApi[];
+  nextCursor?: string | null;
+  hasMore: boolean;
 };
 
 type ShopStats = {
@@ -66,8 +97,8 @@ export default function ShopDeliveriesPage() {
     const fetchDeliveries = async () => {
       try {
         setLoading(true);
-        const data = await apiAuthGet<ShopDelivery[]>("/test/shop/deliveries");
-        setDeliveries(data);
+        const resp = await apiAuthGet<DeliveriesResponse>("/deliveries?limit=500");
+        setDeliveries(resp.deliveries.map(mapDelivery));
       } catch (err: any) {
         console.error("Error fetching shop deliveries:", err);
         setError(err.message || "Une erreur est survenue lors du chargement des livraisons.");
@@ -163,16 +194,19 @@ export default function ShopDeliveriesPage() {
       const statusMatch = statusFilter === 'all' || delivery.status === statusFilter;
       
       // Filtre par montant
-      const amountMatch = delivery.totalAmount >= amountFilter.min && delivery.totalAmount <= amountFilter.max;
+    const amountValue = delivery.totalAmount ?? 0;
+    const amountMatch = amountValue >= amountFilter.min && amountValue <= amountFilter.max;
       
       // Filtre par nombre de sacs
       const bagsMatch = delivery.bags >= bagsFilter.min && delivery.bags <= bagsFilter.max;
       
       // Filtre par recherche
-      const searchMatch = searchTerm === '' || 
-        delivery.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        delivery.clientAddress.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        delivery.notes?.toLowerCase().includes(searchTerm.toLowerCase());
+      const normalizedSearch = searchTerm.toLowerCase();
+      const searchMatch =
+        searchTerm === '' ||
+        (delivery.clientName || '').toLowerCase().includes(normalizedSearch) ||
+        (delivery.clientAddress || '').toLowerCase().includes(normalizedSearch) ||
+        (delivery.notes || '').toLowerCase().includes(normalizedSearch);
 
       return dateMatch && statusMatch && amountMatch && bagsMatch && searchMatch;
     });
@@ -186,8 +220,8 @@ export default function ShopDeliveriesPage() {
           bValue = new Date(b.date).getTime();
           break;
         case 'amount':
-          aValue = a.totalAmount;
-          bValue = b.totalAmount;
+          aValue = a.totalAmount ?? 0;
+          bValue = b.totalAmount ?? 0;
           break;
         case 'client':
           aValue = a.clientName;
@@ -221,7 +255,7 @@ export default function ShopDeliveriesPage() {
   // Statistiques
   const stats = useMemo(() => {
     const total = filteredAndSortedDeliveries.length;
-    const totalRevenue = filteredAndSortedDeliveries.reduce((sum, d) => sum + d.totalAmount, 0);
+    const totalRevenue = filteredAndSortedDeliveries.reduce((sum, d) => sum + (d.totalAmount ?? 0), 0);
     const averageAmount = total > 0 ? totalRevenue / total : 0;
     const byStatus = filteredAndSortedDeliveries.reduce((acc, d) => {
       acc[d.status] = (acc[d.status] || 0) + 1;
@@ -240,11 +274,11 @@ export default function ShopDeliveriesPage() {
         ...filteredAndSortedDeliveries.map(delivery => [
           delivery.id,
           delivery.clientName,
-          delivery.clientAddress,
+          delivery.clientAddress || "",
           formatDate(delivery.date),
           formatTime(delivery.date),
           delivery.bags,
-          delivery.totalAmount.toFixed(2),
+          (delivery.totalAmount ?? 0).toFixed(2),
           getStatusText(delivery.status),
           delivery.notes || ''
         ])
@@ -296,19 +330,55 @@ export default function ShopDeliveriesPage() {
     const modalDelivery: any = {
       ...delivery,
       shopName: delivery.clientName, // ShopDelivery n'a pas shopName, utiliser clientName
-      shopAddress: delivery.clientAddress, // ShopDelivery n'a pas shopAddress, utiliser clientAddress
+      shopAddress: delivery.clientAddress || "", // ShopDelivery n'a pas shopAddress, utiliser clientAddress
     };
     setEditingDelivery(modalDelivery);
   };
 
-  const handleSaveDelivery = (updatedDelivery: Partial<ShopDelivery> & { id: string; date: string; timeSlot: string; bags: number }) => {
-    setDeliveries(prev => 
-      prev.map(delivery => 
-        delivery.id === updatedDelivery.id ? { ...delivery, ...updatedDelivery } as ShopDelivery : delivery
+const handleSaveDelivery = async (updatedDelivery: DeliveryEditPayload) => {
+  const existing = deliveries.find((delivery) => delivery.id === updatedDelivery.id);
+  if (!existing) {
+    const err = new Error("Livraison introuvable");
+    showToast(err.message, "error");
+    throw err;
+  }
+
+  const payload: DeliveryUpdatePayload = {
+    shopId: existing.shopId || existing.raw.shopId,
+    clientId: existing.raw.clientId,
+    employee: existing.raw.employee,
+    sector: existing.raw.sector,
+    ticketNo: existing.raw.ticketNo,
+    amount: existing.raw.amount,
+    today: existing.raw.today ?? false,
+    startWindow: updatedDelivery.date,
+    bags: updatedDelivery.bags,
+    courierNotes: updatedDelivery.notes ?? existing.raw.courierNotes,
+  };
+
+  try {
+    await apiAuthPut(`/deliveries/${updatedDelivery.id}`, payload);
+    setDeliveries((prev) =>
+      prev.map((delivery) =>
+        delivery.id === updatedDelivery.id
+          ? {
+              ...delivery,
+              date: payload.startWindow,
+              timeSlot: updatedDelivery.timeSlot,
+              bags: payload.bags,
+              notes: payload.courierNotes ?? delivery.notes,
+              raw: { ...delivery.raw, ...payload },
+            }
+          : delivery
       )
     );
     setEditingDelivery(null);
-  };
+  } catch (error: any) {
+    console.error("Erreur lors de la mise à jour de la livraison:", error);
+    showToast("Impossible de mettre à jour la livraison.", "error");
+    throw error;
+  }
+};
 
   // Actions en lot
   const handleSelectAll = () => {
@@ -327,27 +397,38 @@ export default function ShopDeliveriesPage() {
     );
   };
 
-  const handleBulkAction = async (action: 'cancel' | 'confirm') => {
-    if (selectedDeliveries.length === 0) return;
-    
-    try {
-      for (const deliveryId of selectedDeliveries) {
-        if (action === 'cancel') {
-          await apiAuthPut(`/test/shop/deliveries/${deliveryId}/cancel`, {});
-        }
-      }
-      
-      showToast(`${selectedDeliveries.length} livraisons ${action === 'cancel' ? 'annulées' : 'confirmées'}`, "success");
-      setSelectedDeliveries([]);
-      
-      // Rafraîchir les données
-      const data = await apiAuthGet<ShopDelivery[]>("/test/shop/deliveries");
-      setDeliveries(data);
-    } catch (error) {
-      console.error("Erreur action en lot:", error);
-      showToast("Erreur lors de l'action en lot", "error");
-    }
-  };
+  const handleBulkAction = async (action: 'cancel' | 'confirm') => {
+  if (selectedDeliveries.length === 0) return;
+
+  if (action !== 'cancel') {
+    showToast("Cette action n'est pas encore disponible", "info");
+    return;
+  }
+
+  if (!confirm(`Confirmer l'annulation de ${selectedDeliveries.length} livraison(s) ?`)) {
+    return;
+  }
+
+  try {
+    for (const deliveryId of selectedDeliveries) {
+      await apiAuthDelete(`/deliveries/${deliveryId}`);
+    }
+    setDeliveries((prev) =>
+      prev.filter((delivery) => !selectedDeliveries.includes(delivery.id))
+    );
+    showToast("Livraisons annulees", "success");
+    setSelectedDeliveries([]);
+  } catch (error) {
+    console.error("Erreur action en lot:", error);
+    showToast("Erreur lors de l'action en lot", "error");
+  }
+};
+
+
+
+
+
+
 
   const handleModifyDelivery = async (deliveryId: string) => {
     try {
@@ -363,26 +444,27 @@ export default function ShopDeliveriesPage() {
     }
   };
 
-  const handleCancelDelivery = async (deliveryId: string) => {
-    if (!confirm("Êtes-vous sûr de vouloir annuler cette livraison ?")) {
-      return;
-    }
+  const handleCancelDelivery = async (deliveryId: string) => {
+  if (!confirm("Etes-vous sur de vouloir annuler cette livraison ?")) {
+    return;
+  }
+
+  try {
+    await apiAuthDelete(`/deliveries/${deliveryId}`);
+    setDeliveries((prev) => prev.filter((delivery) => delivery.id !== deliveryId));
+    setSelectedDeliveries((prev) => prev.filter((id) => id !== deliveryId));
+    showToast("Livraison annulee", "success");
+  } catch (error: any) {
+    console.error("Error cancelling delivery:", error);
+    showToast("Erreur lors de l'annulation de la livraison", "error");
+  }
+};
+
 
-    try {
-      await apiAuthPut(`/test/shop/deliveries/${deliveryId}/cancel`, {});
-      
-      setDeliveries(prev => prev.map(delivery => 
-        delivery.id === deliveryId 
-          ? { ...delivery, status: 'cancelled' as const }
-          : delivery
-      ));
-      
-      showToast("Livraison annulée avec succès", "success");
-    } catch (error: any) {
-      console.error("Error cancelling delivery:", error);
-      showToast("Erreur lors de l'annulation de la livraison", "error");
-    }
-  };
+
+
+
+
 
   if (loading) {
     return (
@@ -835,7 +917,7 @@ export default function ShopDeliveriesPage() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       <div className="font-medium">
-                        {delivery.totalAmount.toFixed(2)} CHF
+                        {formatAmount(delivery.totalAmount)}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -977,3 +1059,110 @@ export default function ShopDeliveriesPage() {
     </ShopLayout>
   );
 }
+const formatTimeSlot = (iso: string) => {
+  const date = new Date(iso);
+  const hour = date.getHours().toString().padStart(2, "0");
+  const minute = date.getMinutes().toString().padStart(2, "0");
+  const end = new Date(date.getTime() + 30 * 60 * 1000);
+  const hourEnd = end.getHours().toString().padStart(2, "0");
+  const minuteEnd = end.getMinutes().toString().padStart(2, "0");
+  return `${hour}:${minute}-${hourEnd}:${minuteEnd}`;
+};
+
+
+
+const mapDelivery = (delivery: DeliveryApi): ShopDelivery => {
+
+  const startWindow = delivery.startWindow;
+
+  const fallbackName = delivery.clientId
+
+    ? `Client ${delivery.clientId.slice(-6)}`
+
+    : "Client";
+
+
+
+  return {
+
+    id: delivery.id,
+
+    shopId: delivery.shopId,
+
+    clientId: delivery.clientId,
+
+    date: startWindow,
+
+    timeSlot: formatTimeSlot(startWindow),
+
+    clientName: delivery.clientName || fallbackName,
+
+    clientAddress: delivery.clientAddress,
+
+    bags: delivery.bags,
+
+    status: delivery.status || "scheduled",
+
+    totalAmount: delivery.amount,
+
+    notes: delivery.courierNotes,
+
+    createdAt: delivery.createdAt || startWindow,
+
+    employee: delivery.employee,
+
+    sector: delivery.sector,
+
+    ticketNo: delivery.ticketNo,
+
+    raw: delivery,
+
+  };
+
+};
+
+
+
+const formatAmount = (value?: number) =>
+
+  value != null ? `${value.toFixed(2)} CHF` : "N/A";
+
+type DeliveryUpdatePayload = {
+
+  shopId?: string;
+
+  clientId: string;
+
+  employee: string;
+
+  sector?: string;
+
+  ticketNo?: string;
+
+  amount?: number;
+
+  today: boolean;
+
+  startWindow: string;
+
+  bags: number;
+
+  courierNotes?: string;
+
+};
+
+type DeliveryEditPayload = {
+
+  id: string;
+
+  date: string;
+
+  timeSlot: string;
+
+  bags: number;
+
+  notes?: string;
+
+};
+
+

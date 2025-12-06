@@ -1,0 +1,8 @@
+export const ENABLE_HQ_FEATURES =
+  process.env.NEXT_PUBLIC_ENABLE_HQ_FEATURES === "true";
+
+export const ENABLE_REGIONAL_FEATURES =
+  process.env.NEXT_PUBLIC_ENABLE_REGIONAL_FEATURES === "true";
+
+export const ENABLE_SUPER_ADMIN_FEATURES =
+  process.env.NEXT_PUBLIC_ENABLE_SUPER_ADMIN_FEATURES === "true";

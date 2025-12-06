@@ -5,6 +5,8 @@ import LoadingSpinner from "@/components/LoadingSpinner";
 import { apiAuthGet } from "@/lib/api";
 import { showToast } from "@/lib/toast";
 import DeliveryEditModal from "@/components/DeliveryEditModal";
+import PausedScreen from "@/components/PausedScreen";
+import { ENABLE_HQ_FEATURES } from "@/lib/featureFlags";
 
 type HQDelivery = {
   id: string;
@@ -22,6 +24,15 @@ type HQDelivery = {
 };
 
 export default function HQAdminDeliveriesPage() {
+  if (!ENABLE_HQ_FEATURES) {
+    return (
+      <PausedScreen
+        title="Livraisons HQ Admin en pause"
+        description="La vue consolidée des livraisons HQ sera activée lorsque les endpoints backend seront disponibles."
+      />
+    );
+  }
+
   const [deliveries, setDeliveries] = useState<HQDelivery[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

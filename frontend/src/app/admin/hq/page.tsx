@@ -6,6 +6,8 @@ import { auth } from "@/lib/firebase";
 import { onAuthStateChanged, User } from "firebase/auth";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import PausedScreen from "@/components/PausedScreen";
+import { ENABLE_HQ_FEATURES } from "@/lib/featureFlags";
 
 type HqStats = {
   totalShops: number;
@@ -25,6 +27,15 @@ type Region = {
 };
 
 export default function HqAdminPage() {
+  if (!ENABLE_HQ_FEATURES) {
+    return (
+      <PausedScreen
+        title="Console HQ en pause"
+        description="Ces écrans seront disponibles plus tard. Merci d’utiliser les vues Magasin/Client pour le moment."
+      />
+    );
+  }
+
   const [stats, setStats] = useState<HqStats | null>(null);
   const [regions, setRegions] = useState<Region[]>([]);
   const [loading, setLoading] = useState(true);

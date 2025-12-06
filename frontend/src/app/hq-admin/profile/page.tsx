@@ -4,6 +4,8 @@ import HQAdminLayout from "@/components/HQAdminLayout";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import { apiAuthGet, apiAuthPut } from "@/lib/api";
 import { showToast } from "@/lib/toast";
+import PausedScreen from "@/components/PausedScreen";
+import { ENABLE_HQ_FEATURES } from "@/lib/featureFlags";
 
 type HQAdminProfile = {
   id: string;
@@ -26,6 +28,15 @@ type HQAdminProfile = {
 };
 
 export default function HQAdminProfilePage() {
+  if (!ENABLE_HQ_FEATURES) {
+    return (
+      <PausedScreen
+        title="Profil HQ Admin en pause"
+        description="Cette page sera activée lorsque la gestion HQ sera branchée au backend."
+      />
+    );
+  }
+
   const [profile, setProfile] = useState<HQAdminProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

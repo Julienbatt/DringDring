@@ -3,11 +3,22 @@ import { useEffect, useState } from "react";
 import AuthGate from "@/components/AuthGate";
 import { apiAuthGet, apiAuthPost } from "@/lib/api";
 import { showToast } from "@/lib/toast";
+import PausedScreen from "@/components/PausedScreen";
+import { ENABLE_SUPER_ADMIN_FEATURES } from "@/lib/featureFlags";
 
 type AdminUser = { uid: string; email?: string; displayName?: string; disabled: boolean; roles: string[]; shopId?: string | null; regionId?: string | null };
 type UsersResp = { items: AdminUser[]; nextPageToken?: string | null };
 
 export default function AdminUsersPage(){
+  if (!ENABLE_SUPER_ADMIN_FEATURES) {
+    return (
+      <PausedScreen
+        title="Gestion des utilisateurs en pause"
+        description="La gestion avancée des utilisateurs reviendra une fois l’API d’administration stabilisée."
+      />
+    );
+  }
+
   const [items, setItems] = useState<AdminUser[]>([]);
   const [query, setQuery] = useState("");
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
@@ -97,5 +108,4 @@ export default function AdminUsersPage(){
     </AuthGate>
   );
 }
-
 
