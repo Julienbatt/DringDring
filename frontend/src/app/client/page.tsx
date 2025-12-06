@@ -17,19 +17,18 @@ type ClientStats = {
   lastDelivery?: string;
 };
 
-type UpcomingDelivery = {
+type ClientDelivery = {
   id: string;
-  date: string;
-  timeSlot: string;
-  bags: number;
+  startWindow: string;
   status: string;
-  shopName: string;
+  bags: number;
+  shopName?: string;
 };
 
 export default function ClientDashboardPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [stats, setStats] = useState<ClientStats | null>(null);
-  const [upcoming, setUpcoming] = useState<UpcomingDelivery[]>([]);
+  const [upcoming, setUpcoming] = useState<ClientDelivery[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -53,16 +52,12 @@ export default function ClientDashboardPage() {
   const loadClientData = async () => {
     setLoading(true);
     try {
-      const [statsData, upcomingData, allDeliveriesData] = await Promise.all([
-        apiAuthGet<ClientStats>("/test/client/stats"),
-        apiAuthGet<UpcomingDelivery[]>("/test/client/deliveries/upcoming"),
-        apiAuthGet<any[]>("/test/client/deliveries")
+      const [statsData, deliveriesData] = await Promise.all([
+        apiAuthGet<ClientStats>("/client/stats"),
+        apiAuthGet<ClientDelivery[]>("/client/deliveries"),
       ]);
-      
-      // Calculer les statistiques en temps réel
-      const calculatedStats = calculateRealTimeStats(allDeliveriesData);
-      setStats(calculatedStats);
-      setUpcoming(upcomingData);
+      setStats(statsData);
+      setUpcoming(getUpcomingDeliveries(deliveriesData));
     } catch (error: any) {
       console.error("Erreur chargement client:", error);
     } finally {
@@ -70,40 +65,19 @@ export default function ClientDashboardPage() {
     }
   };
 
-  const calculateRealTimeStats = (deliveries: any[]): ClientStats => {
+  const getUpcomingDeliveries = (deliveries: ClientDelivery[]) => {
     const now = new Date();
-    const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    
-    // Calculs en temps réel
-    const totalDeliveries = deliveries.length;
-    const thisMonthDeliveries = deliveries.filter(d => 
-      new Date(d.date) >= thisMonth
-    ).length;
-    
-    const totalBags = deliveries.reduce((sum, d) => sum + d.bags, 0);
-    const averageBags = totalDeliveries > 0 ? totalBags / totalDeliveries : 0;
-    
-    const upcomingDeliveries = deliveries.filter(d => 
-      new Date(d.date) > now && d.status !== 'delivered' && d.status !== 'cancelled'
-    ).length;
-    
-    const lastDelivery = deliveries.length > 0 ? 
-      deliveries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0].date : 
-      undefined;
-
-    return {
-      totalDeliveries,
-      thisMonth: thisMonthDeliveries,
-      totalBags,
-      averageBags: Math.round(averageBags * 10) / 10,
-      upcomingDeliveries,
-      lastDelivery
-    };
+    return deliveries
+      .filter(d => {
+        const dt = new Date(d.startWindow);
+        return dt > now && d.status !== "delivered" && d.status !== "cancelled";
+      })
+      .sort((a, b) => new Date(a.startWindow).getTime() - new Date(b.startWindow).getTime())
+      .slice(0, 5);
   };
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('fr-CH', {
+  const formatDate = (isoString: string) => {
+    return new Date(isoString).toLocaleDateString('fr-CH', {
       weekday: 'long',
       year: 'numeric',
       month: 'long',
@@ -111,8 +85,8 @@ export default function ClientDashboardPage() {
     });
   };
 
-  const formatTime = (timeString: string) => {
-    return new Date(timeString).toLocaleTimeString('fr-CH', {
+  const formatTime = (isoString: string) => {
+    return new Date(isoString).toLocaleTimeString('fr-CH', {
       hour: '2-digit',
       minute: '2-digit'
     });
@@ -266,10 +240,10 @@ export default function ClientDashboardPage() {
                             <div className="flex justify-between items-start">
                               <div>
                                 <p className="font-medium text-gray-900">
-                                  {formatDate(delivery.date)}
+                                  {formatDate(delivery.startWindow)}
                                 </p>
                                 <p className="text-sm text-gray-600">
-                                  {formatTime(delivery.date)} • {delivery.bags} sac{delivery.bags > 1 ? 's' : ''}
+                                  {formatTime(delivery.startWindow)} • {delivery.bags} sac{delivery.bags > 1 ? 's' : ''}
                                 </p>
                                 <p className="text-sm text-gray-500">
                                   {delivery.shopName}

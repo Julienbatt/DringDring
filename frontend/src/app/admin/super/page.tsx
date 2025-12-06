@@ -8,6 +8,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { apiAuthGet } from "@/lib/api";
 import LoadingSpinner from "@/components/LoadingSpinner";
+import PausedScreen from "@/components/PausedScreen";
+import { ENABLE_SUPER_ADMIN_FEATURES } from "@/lib/featureFlags";
 
 type SuperAdminStats = {
   totalUsers: number;
@@ -26,6 +28,15 @@ type SystemAlert = {
 };
 
 export default function SuperAdminPage() {
+  if (!ENABLE_SUPER_ADMIN_FEATURES) {
+    return (
+      <PausedScreen
+        title="Espace Super Admin en pause"
+        description="Les outils de supervision globale seront remis en ligne une fois les APIs disponibles."
+      />
+    );
+  }
+
   const [stats, setStats] = useState<SuperAdminStats | null>(null);
   const [alerts, setAlerts] = useState<SystemAlert[]>([]);
   const [loading, setLoading] = useState(true);
@@ -505,4 +516,3 @@ export default function SuperAdminPage() {
     </Layout>
   );
 }
-

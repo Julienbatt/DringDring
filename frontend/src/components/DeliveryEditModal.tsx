@@ -1,7 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
 import { XMarkIcon } from "@heroicons/react/24/outline";
-import { apiAuthPut } from "@/lib/api";
 import { showToast } from "@/lib/toast";
 
 type Delivery = {
@@ -11,20 +10,33 @@ type Delivery = {
   shopName: string;
   shopAddress?: string;
   bags: number;
-  status: 'scheduled' | 'confirmed' | 'in_progress' | 'delivered' | 'cancelled';
+  status: "scheduled" | "confirmed" | "in_progress" | "delivered" | "cancelled";
   totalAmount: number;
   notes?: string;
   createdAt: string;
+};
+
+type DeliveryEditPayload = {
+  id: string;
+  date: string;
+  timeSlot: string;
+  bags: number;
+  notes?: string;
 };
 
 type DeliveryEditModalProps = {
   delivery: Delivery | null;
   isOpen: boolean;
   onClose: () => void;
-  onSave: (updatedDelivery: Partial<Delivery> & { id: string; date: string; timeSlot: string; bags: number }) => void;
+  onSave: (payload: DeliveryEditPayload) => Promise<void> | void;
 };
 
-export default function DeliveryEditModal({ delivery, isOpen, onClose, onSave }: DeliveryEditModalProps) {
+export default function DeliveryEditModal({
+  delivery,
+  isOpen,
+  onClose,
+  onSave,
+}: DeliveryEditModalProps) {
   const [formData, setFormData] = useState({
     date: '',
     timeSlot: '',
@@ -78,18 +90,17 @@ export default function DeliveryEditModal({ delivery, isOpen, onClose, onSave }:
 
     setIsLoading(true);
     try {
-      const updatedDelivery = {
-        ...delivery,
-        date: new Date(`${formData.date}T${formData.timeSlot.split('-')[0]}:00`).toISOString(),
+      const updatedDelivery: DeliveryEditPayload = {
+        id: delivery.id,
+        date: new Date(
+          `${formData.date}T${formData.timeSlot.split("-")[0]}:00`
+        ).toISOString(),
         timeSlot: formData.timeSlot,
         bags: formData.bags,
-        totalAmount: calculatePrice(formData.bags),
-        notes: formData.notes
+        notes: formData.notes || undefined,
       };
 
-      await apiAuthPut(`/test/client/deliveries/${delivery.id}`, updatedDelivery);
-      
-      onSave(updatedDelivery);
+      await Promise.resolve(onSave(updatedDelivery));
       showToast("Livraison modifiée avec succès", "success");
       onClose();
     } catch (error: any) {

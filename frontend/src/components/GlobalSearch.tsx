@@ -57,18 +57,18 @@ export default function GlobalSearch({ role, onResultClick }: GlobalSearchProps)
         role: 'client'
       }
     },
-    {
-      id: '3',
-      type: 'shop',
-      title: 'Metropole Migros Sion',
-      description: 'Place de la Gare 5, 1950 Sion',
-      url: '/hq-admin/shops',
-      icon: '🏪',
-      metadata: {
-        status: 'Actif'
-      }
-    },
-    {
+    {
+      id: '3',
+      type: 'shop',
+      title: 'Metropole Migros Sion',
+      description: 'Place de la Gare 5, 1950 Sion',
+      url: '/shop',
+      icon: 'dY??',
+      metadata: {
+        status: 'Actif'
+      }
+    },
+   {
       id: '4',
       type: 'report',
       title: 'Rapport mensuel Janvier 2025',
@@ -79,17 +79,17 @@ export default function GlobalSearch({ role, onResultClick }: GlobalSearchProps)
         date: '2025-01-10'
       }
     },
-    {
-      id: '5',
-      type: 'user',
-      title: 'Jean Dupont',
-      description: 'HQ Admin - Migros Valais',
-      url: '/hq-admin/users',
-      icon: '👨‍💼',
-      metadata: {
-        role: 'hq_admin'
-      }
-    }
+    {
+      id: '5',
+      type: 'user',
+      title: 'Contact magasin',
+      description: 'R?f?rent DringDring',
+      url: '/shop/clients',
+      icon: 'dY`',
+      metadata: {
+        role: 'shop'
+      }
+    }
   ];
 
   useEffect(() => {

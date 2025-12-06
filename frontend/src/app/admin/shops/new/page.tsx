@@ -4,10 +4,21 @@ import AuthGate from "@/components/AuthGate";
 import { createShop } from "@/lib/api";
 import { showToast } from "@/lib/toast";
 import PricingConfig, { PricingConfig as PricingConfigType } from "@/components/PricingConfig";
+import PausedScreen from "@/components/PausedScreen";
+import { ENABLE_SUPER_ADMIN_FEATURES } from "@/lib/featureFlags";
 
 const CANTONS = ['AG','AI','AR','BE','BL','BS','FR','GE','GL','GR','JU','LU','NE','NW','OW','SG','SH','SO','SZ','TG','TI','UR','VD','VS','ZG','ZH'];
 
 export default function NewShopPage(){
+  if (!ENABLE_SUPER_ADMIN_FEATURES) {
+    return (
+      <PausedScreen
+        title="Création de magasin en pause"
+        description="La gestion avancée des magasins sera activée quand l’API d’administration sera prête."
+      />
+    );
+  }
+
   const [form, setForm] = useState({
     name: '', email: '', phone: '',
     street: '', streetNumber: '', zip: '', city: '',
@@ -80,7 +91,6 @@ export default function NewShopPage(){
     </AuthGate>
   );
 }
-
 
 
 

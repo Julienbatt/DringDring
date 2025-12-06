@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import HQAdminLayout from "@/components/HQAdminLayout";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import { apiAuthGet } from "@/lib/api";
+import PausedScreen from "@/components/PausedScreen";
+import { ENABLE_HQ_FEATURES } from "@/lib/featureFlags";
 
 type HQUser = {
   id: string;
@@ -18,6 +20,15 @@ type HQUser = {
 };
 
 export default function HQAdminUsersPage() {
+  if (!ENABLE_HQ_FEATURES) {
+    return (
+      <PausedScreen
+        title="Utilisateurs HQ en pause"
+        description="La gestion des utilisateurs HQ sera réactivée lorsque l’API sera disponible."
+      />
+    );
+  }
+
   const [users, setUsers] = useState<HQUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

@@ -13,6 +13,7 @@ class ClientCreate(BaseModel):
     floor: Optional[str] = None
     entryCode: Optional[str] = None
     cms: bool = False
+    shopId: Optional[str] = None
 
 
 class Client(ClientCreate):

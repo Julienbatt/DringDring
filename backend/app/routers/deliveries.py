@@ -14,8 +14,25 @@ from ..services.ux import start_operation_loading, complete_operation, notify_su
 from ..services.undo_redo import add_action, ActionType
 from ..services.realtime import publish_update, UpdateType
 
+ADMIN_ROLES = {"admin", "super-admin", "hq-admin", "regional-admin"}
+
 
 router = APIRouter(prefix="/deliveries", tags=["deliveries"]) 
+
+
+def _is_admin(user: CurrentUser) -> bool:
+    return any(role in ADMIN_ROLES for role in user.roles)
+
+
+def _ensure_delivery_scope(user: CurrentUser, delivery_data: dict) -> None:
+    if _is_admin(user):
+        return
+    shop_id = delivery_data.get("shopId")
+    if "shop" in user.roles and user.shop_id and user.shop_id == shop_id:
+        return
+    if "client" in user.roles and user.client_id and user.client_id == delivery_data.get("clientId"):
+        return
+    raise HTTPException(status_code=403, detail="Not authorized for this delivery")
 
 
 @router.post("", response_model=dict)
@@ -24,17 +41,22 @@ def create_delivery(payload: DeliveryCreate, current_user: CurrentUser = Depends
     operation_id = start_operation_loading("create_delivery", "Creating delivery...")
     
     try:
-        if "admin" not in current_user.roles and "shop" not in current_user.roles:
+        is_admin = _is_admin(current_user)
+        is_shop = "shop" in current_user.roles
+        if not is_admin and not is_shop:
             complete_operation(operation_id, False, "Not authorized")
             raise HTTPException(status_code=403, detail="Not authorized")
         
         # If caller is a shop, default to their shopId when not provided
-        if "shop" in current_user.roles:
+        if is_shop:
             effective_shop = payload.shopId or current_user.shop_id or ""
             if not effective_shop:
                 complete_operation(operation_id, False, "Missing shopId for shop user")
                 raise HTTPException(status_code=422, detail="Missing shopId for shop user")
             payload.shopId = effective_shop
+        elif not payload.shopId:
+            complete_operation(operation_id, False, "shopId is required for admin-created deliveries")
+            raise HTTPException(status_code=422, detail="shopId is required for admin-created deliveries")
         
         db = get_db()
         data = payload.model_dump()
@@ -212,6 +234,7 @@ def get_delivery(delivery_id: str, current_user: CurrentUser = Depends(get_curre
     if not snap.exists:
         raise HTTPException(status_code=404, detail="Delivery not found")
     data = snap.to_dict() or {}
+    _ensure_delivery_scope(current_user, data)
     return Delivery(**data)
 
 
@@ -233,9 +256,14 @@ def list_deliveries(
     
     # Apply filters based on user role
     if "shop" in current_user.roles:
+        if not current_user.shop_id:
+            raise HTTPException(status_code=422, detail="Missing shop scope for this user")
         query = query.where("shopId", "==", current_user.shop_id)
-    elif shopId:
-        query = query.where("shopId", "==", shopId)
+    elif _is_admin(current_user):
+        if shopId:
+            query = query.where("shopId", "==", shopId)
+    else:
+        raise HTTPException(status_code=403, detail="Not authorized to list deliveries")
     
     # Date filters
     if dateFrom:
@@ -303,7 +331,7 @@ def update_delivery(
     payload: DeliveryCreate, 
     current_user: CurrentUser = Depends(get_current_user)
 ):
-    if "admin" not in current_user.roles and "shop" not in current_user.roles:
+    if not (_is_admin(current_user) or "shop" in current_user.roles):
         raise HTTPException(status_code=403, detail="Not authorized")
     
     db = get_db()
@@ -315,9 +343,10 @@ def update_delivery(
         raise HTTPException(status_code=404, detail="Delivery not found")
     
     # Check permissions
-    delivery_data = delivery_doc.to_dict()
-    if "shop" in current_user.roles and delivery_data.get("shopId") != current_user.shop_id:
-        raise HTTPException(status_code=403, detail="Not authorized to update this delivery")
+    delivery_data = delivery_doc.to_dict() or {}
+    _ensure_delivery_scope(current_user, delivery_data)
+    if not payload.shopId:
+        payload.shopId = delivery_data.get("shopId")
     
     # Update data
     data = payload.model_dump()
@@ -433,7 +462,7 @@ def update_delivery(
 
 @router.delete("/{delivery_id}", response_model=dict)
 def delete_delivery(delivery_id: str, current_user: CurrentUser = Depends(get_current_user)):
-    if "admin" not in current_user.roles and "shop" not in current_user.roles:
+    if not (_is_admin(current_user) or "shop" in current_user.roles):
         raise HTTPException(status_code=403, detail="Not authorized")
     
     db = get_db()
@@ -445,9 +474,8 @@ def delete_delivery(delivery_id: str, current_user: CurrentUser = Depends(get_cu
         raise HTTPException(status_code=404, detail="Delivery not found")
     
     # Check permissions
-    delivery_data = delivery_doc.to_dict()
-    if "shop" in current_user.roles and delivery_data.get("shopId") != current_user.shop_id:
-        raise HTTPException(status_code=403, detail="Not authorized to delete this delivery")
+    delivery_data = delivery_doc.to_dict() or {}
+    _ensure_delivery_scope(current_user, delivery_data)
     
     # Delete from Sheets if configured
     try:

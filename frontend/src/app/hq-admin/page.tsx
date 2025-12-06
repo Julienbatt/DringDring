@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import HQAdminLayout from "@/components/HQAdminLayout";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import { apiAuthGet } from "@/lib/api";
+import PausedScreen from "@/components/PausedScreen";
+import { ENABLE_HQ_FEATURES } from "@/lib/featureFlags";
 
 type HQStats = {
   totalShops: number;
@@ -29,6 +31,15 @@ type RecentDelivery = {
 };
 
 export default function HQAdminDashboard() {
+  if (!ENABLE_HQ_FEATURES) {
+    return (
+      <PausedScreen
+        title="Espace HQ Admin en pause"
+        description="Cette interface multi-magasins sera activée dès que ses APIs backend seront prêtes. En attendant, merci d’utiliser les espaces Magasin et Client."
+      />
+    );
+  }
+
   const [stats, setStats] = useState<HQStats | null>(null);
   const [recentDeliveries, setRecentDeliveries] = useState<RecentDelivery[]>([]);
   const [loading, setLoading] = useState(true);
@@ -361,4 +372,3 @@ export default function HQAdminDashboard() {
     </HQAdminLayout>
   );
 }
-

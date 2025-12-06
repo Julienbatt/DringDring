@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
-from typing import List
+from typing import List, Optional
 import csv
 import io
 import re
@@ -10,6 +10,9 @@ import time
 from ..dependencies.auth import get_current_user, CurrentUser
 from ..schemas.clients import Client, ClientCreate
 from ..services.db import get_db
+
+
+ADMIN_ROLES = {"admin", "super-admin", "hq-admin", "regional-admin"}
 
 
 router = APIRouter(prefix="/clients", tags=["clients"]) 
@@ -37,6 +40,28 @@ def _build_index_from_firestore() -> None:
     _client_index_loaded_at = time.time()
 
 
+def _user_can_manage_all_clients(user: CurrentUser) -> bool:
+    return any(role in ADMIN_ROLES for role in user.roles)
+
+
+def _user_is_shop_with_scope(user: CurrentUser, shop_id: Optional[str]) -> bool:
+    return "shop" in user.roles and user.shop_id and shop_id and user.shop_id == shop_id
+
+
+def _user_is_client_self(user: CurrentUser, client_id: str) -> bool:
+    return "client" in user.roles and user.client_id and user.client_id == client_id
+
+
+def _ensure_client_visibility(user: CurrentUser, client_id: str, shop_id: Optional[str]) -> None:
+    if _user_can_manage_all_clients(user):
+        return
+    if _user_is_shop_with_scope(user, shop_id):
+        return
+    if _user_is_client_self(user, client_id):
+        return
+    raise HTTPException(status_code=403, detail="Not authorized for this client")
+
+
 @router.on_event("startup")
 def _warmup_client_index() -> None:
     try:
@@ -48,8 +73,19 @@ def _warmup_client_index() -> None:
 
 @router.post("", response_model=dict)
 def create_client(payload: ClientCreate, current_user: CurrentUser = Depends(get_current_user)):
-    if "admin" not in current_user.roles and "shop" not in current_user.roles:
+    is_admin = _user_can_manage_all_clients(current_user)
+    is_shop = "shop" in current_user.roles
+    if not is_admin and not is_shop:
         raise HTTPException(status_code=403, detail="Not authorized")
+
+    if is_shop:
+        if not current_user.shop_id:
+            raise HTTPException(status_code=422, detail="Shop scope missing for this user")
+        payload.shopId = current_user.shop_id
+    else:
+        if not payload.shopId:
+            raise HTTPException(status_code=422, detail="shopId is required for admin-created clients")
+
     db = get_db()
     data = payload.model_dump()
     data.update({"createdAt": datetime.utcnow().isoformat(), "createdBy": current_user.user_id})
@@ -65,12 +101,16 @@ def get_client(client_id: str, current_user: CurrentUser = Depends(get_current_u
     if not snap.exists:
         raise HTTPException(status_code=404, detail="Client not found")
     data = snap.to_dict() or {}
+    _ensure_client_visibility(current_user, client_id, data.get("shopId"))
     return Client(id=client_id, **data)
 
 
 @router.get("", response_model=List[Client])
 def search_clients(query: str = Query(""), current_user: CurrentUser = Depends(get_current_user)):
     q = (query or "").strip().lower()
+    if "client" in current_user.roles and not _user_can_manage_all_clients(current_user):
+        # Clients cannot search other clients
+        return []
     # Avoid expensive scans for single-character queries
     if len(q) < 2:
         return []
@@ -91,7 +131,12 @@ def search_clients(query: str = Query(""), current_user: CurrentUser = Depends(g
                 out.append(Client(id=item["id"], **(item["doc"])) )
                 if len(out) >= cap:
                     break
-        return out
+        filtered = [
+            c for c in out
+            if _user_can_manage_all_clients(current_user)
+            or _user_is_shop_with_scope(current_user, c.shopId)
+        ]
+        return filtered
     # Fallback: light Firestore prefix queries (cap total)
     try:
         db = get_db()
@@ -117,7 +162,12 @@ def search_clients(query: str = Query(""), current_user: CurrentUser = Depends(g
                     break
     except Exception:
         pass
-    return out
+    if _user_can_manage_all_clients(current_user):
+        return out
+    return [
+        c for c in out
+        if _user_is_shop_with_scope(current_user, c.shopId)
+    ]
 
 
 @router.post("/import", response_model=dict)
@@ -384,3 +434,35 @@ def import_clients(
 
     return {"ok": True, "created": created, "updated": updated, "skipped": skipped, "errors": errors[:20]}
 
+
+@router.put("/{client_id}", response_model=Client)
+def update_client(client_id: str, payload: ClientCreate, current_user: CurrentUser = Depends(get_current_user)):
+    db = get_db()
+    doc_ref = db.collection("clients").document(client_id)
+    snap = doc_ref.get()
+    if not snap.exists:
+        raise HTTPException(status_code=404, detail="Client not found")
+    data = snap.to_dict() or {}
+    _ensure_client_visibility(current_user, client_id, data.get("shopId"))
+
+    update_fields = payload.model_dump()
+    if not _user_can_manage_all_clients(current_user):
+        update_fields.pop("shopId", None)
+    update_fields["updatedAt"] = datetime.utcnow().isoformat()
+
+    doc_ref.update(update_fields)
+    data.update(update_fields)
+    return Client(id=client_id, **data)
+
+
+@router.delete("/{client_id}", response_model=dict)
+def delete_client(client_id: str, current_user: CurrentUser = Depends(get_current_user)):
+    db = get_db()
+    doc_ref = db.collection("clients").document(client_id)
+    snap = doc_ref.get()
+    if not snap.exists:
+        raise HTTPException(status_code=404, detail="Client not found")
+    data = snap.to_dict() or {}
+    _ensure_client_visibility(current_user, client_id, data.get("shopId"))
+    doc_ref.delete()
+    return {"status": "deleted", "id": client_id}

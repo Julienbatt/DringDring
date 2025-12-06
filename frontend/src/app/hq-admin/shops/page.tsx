@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import HQAdminLayout from "@/components/HQAdminLayout";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import { apiAuthGet } from "@/lib/api";
+import PausedScreen from "@/components/PausedScreen";
+import { ENABLE_HQ_FEATURES } from "@/lib/featureFlags";
 
 type HQShop = {
   id: string;
@@ -18,6 +20,15 @@ type HQShop = {
 };
 
 export default function HQAdminShopsPage() {
+  if (!ENABLE_HQ_FEATURES) {
+    return (
+      <PausedScreen
+        title="Magasins HQ en pause"
+        description="L’administration multi-magasins sera réactivée dès que les APIs correspondantes seront prêtes."
+      />
+    );
+  }
+
   const [shops, setShops] = useState<HQShop[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

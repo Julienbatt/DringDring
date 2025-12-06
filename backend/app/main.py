@@ -9,11 +9,24 @@ import logging
 import uuid
 
 from .dependencies.auth import get_current_user, CurrentUser
-from .routers import shops, clients, deliveries, reports, admin, ux, documentation, client_stats, test_endpoints
+from .services.db import get_db
+from .routers import shops, clients, deliveries, reports, admin, ux, documentation, client_stats
 
 
 class HealthResponse(BaseModel):
     status: str
+
+
+class AuthMeResponse(BaseModel):
+    userId: str
+    email: Optional[str]
+    roles: List[str]
+    shopId: Optional[str] = None
+    clientId: Optional[str] = None
+    regionId: Optional[str] = None
+    chainId: Optional[str] = None
+    shop: Optional[dict] = None
+    client: Optional[dict] = None
 
 
 app = FastAPI(title="DringDring API", version="0.1.0")
@@ -102,15 +115,44 @@ def debug_sentry():
     raise RuntimeError("Sentry test error from /debug/sentry")
 
 
-@app.get("/auth/me", tags=["auth"]) 
-def auth_me(current_user: CurrentUser = Depends(get_current_user)) -> dict:
-    return {
-        "userId": current_user.user_id,
-        "email": current_user.email,
-        "roles": current_user.roles,
-        "shopId": current_user.shop_id,
-        "clientId": current_user.client_id,
-    }
+@app.get("/auth/me", response_model=AuthMeResponse, tags=["auth"]) 
+def auth_me(current_user: CurrentUser = Depends(get_current_user)) -> AuthMeResponse:
+    """Expose firebase claims plus hydrated shop/client docs for quick frontend bootstrapping."""
+    db = get_db()
+    shop_doc = None
+    client_doc = None
+
+    if current_user.shop_id:
+        try:
+            snap = db.collection("shops").document(current_user.shop_id).get()
+            if snap.exists:
+                data = snap.to_dict() or {}
+                data["id"] = snap.id
+                shop_doc = data
+        except Exception:
+            shop_doc = None
+
+    if current_user.client_id:
+        try:
+            snap = db.collection("clients").document(current_user.client_id).get()
+            if snap.exists:
+                data = snap.to_dict() or {}
+                data["id"] = snap.id
+                client_doc = data
+        except Exception:
+            client_doc = None
+
+    return AuthMeResponse(
+        userId=current_user.user_id,
+        email=current_user.email,
+        roles=current_user.roles,
+        shopId=current_user.shop_id,
+        clientId=current_user.client_id,
+        regionId=current_user.region_id,
+        chainId=current_user.chain_id,
+        shop=shop_doc,
+        client=client_doc,
+    )
 
 
 app.include_router(shops.router)
@@ -121,6 +163,3 @@ app.include_router(admin.router)
 app.include_router(ux.router)
 app.include_router(documentation.router)
 app.include_router(client_stats.router)
-app.include_router(test_endpoints.router)
-
-
