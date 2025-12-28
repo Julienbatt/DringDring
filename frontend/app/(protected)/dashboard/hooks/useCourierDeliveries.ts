@@ -1,0 +1,62 @@
+'use client'
+
+import { useCallback, useEffect, useState } from 'react'
+import { createClient } from '@/lib/supabase/client'
+import { apiGet } from '@/lib/api'
+
+export type CourierDeliveryRow = {
+    delivery_id: string
+    delivery_date: string
+    shop_name: string
+    shop_address: string
+    client_name: string | null
+    client_address: string
+    client_postal_code: string
+    client_city: string
+    time_window: string
+    bags: number
+    status: string
+    status_updated_at: string | null
+}
+
+export function useCourierDeliveries(date?: string) {
+    const [data, setData] = useState<CourierDeliveryRow[] | null>(null)
+    const [loading, setLoading] = useState(true)
+    const [error, setError] = useState<string | null>(null)
+
+    const load = useCallback(async () => {
+        setLoading(true)
+        setError(null)
+
+        try {
+            const supabase = createClient()
+            const { data: sessionData } = await supabase.auth.getSession()
+            const session = sessionData.session
+
+            if (!session) {
+                setError('Session inexistante')
+                setData(null)
+                return
+            }
+
+            const query = date ? `?date=${encodeURIComponent(date)}` : ''
+            const result = await apiGet<CourierDeliveryRow[]>(
+                `/deliveries/courier${query}`,
+                session.access_token
+            )
+            setData(result)
+        } catch (e: any) {
+            console.error(e)
+            setError('Erreur de chargement des livraisons')
+            setData(null)
+        } finally {
+            setLoading(false)
+        }
+    }, [date])
+
+    useEffect(() => {
+        load()
+    }, [load])
+
+    return { data, loading, error, refresh: load }
+}

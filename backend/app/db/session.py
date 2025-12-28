@@ -38,7 +38,7 @@ def get_db_connection(jwt_claims: str):
         "hostaddr": ipv4,  # FORCE l'utilisation de l'IPv4
         "port": port,
         "dbname": dbname.split('?')[0],  # Remove query params (e.g. ?pgbouncer=true).
-        "options": f"-c search_path=public -c statement_timeout=30000 -c jit_claims='{jwt_claims}'",
+        "options": f"-c search_path=public -c statement_timeout=30000 -c request.jwt.claims='{jwt_claims}'",
     }
     
     conn = psycopg.connect(**conn_params)

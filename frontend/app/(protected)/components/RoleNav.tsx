@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useMe } from '../hooks/useMe'
+import { Calculator } from 'lucide-react'
 
 type NavItem = {
   label: string
@@ -12,10 +13,18 @@ type NavItem = {
 const NAV_ITEMS: NavItem[] = [
   { label: 'Decomptes', href: '/reports', roles: ['city'] },
   { label: 'Synthese HQ', href: '/reports', roles: ['hq'] },
+  { label: 'Clients', href: '/admin/clients', roles: ['admin_region'] },
+  { label: 'Magasins', href: '/admin/shops', roles: ['admin_region'] },
+  { label: 'Facturation', href: '/admin/billing', roles: ['admin_region'] },
   {
-    label: 'Reporting',
-    href: '/reports',
-    roles: ['shop', 'admin_region', 'super_admin', 'courier', 'customer'],
+    label: 'Dashboard',
+    href: '/dashboard',
+    roles: ['shop', 'admin_region', 'super_admin', 'courier', 'customer', 'city', 'hq'],
+  },
+  {
+    label: 'Paramètres',
+    href: '/settings',
+    roles: ['shop', 'admin_region', 'super_admin', 'courier', 'customer', 'city', 'hq'],
   },
 ]
 

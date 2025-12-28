@@ -1,11 +1,12 @@
 'use client'
 
+import { Suspense } from 'react'
 import CityReport from './components/CityReport'
 import HqReport from './components/HqReport'
 import ShopReport from './components/ShopReport'
 import { useMe } from '../hooks/useMe'
 
-export default function ReportsPage() {
+function ReportsContent() {
   const { data, loading, error } = useMe()
 
   if (loading) {
@@ -57,5 +58,13 @@ export default function ReportsPage() {
     <div className="p-8 text-sm text-gray-600">
       Aucune vue de reporting disponible pour ce role.
     </div>
+  )
+}
+
+export default function ReportsPage() {
+  return (
+    <Suspense fallback={<div>Chargement...</div>}>
+      <ReportsContent />
+    </Suspense>
   )
 }

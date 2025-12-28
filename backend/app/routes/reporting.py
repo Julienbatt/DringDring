@@ -1,5 +1,6 @@
 import csv
 import io
+import zipfile
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -14,6 +15,8 @@ from app.pdf.city_monthly_report import build_city_monthly_pdf
 from app.pdf.hq_monthly_report import build_hq_monthly_pdf
 from app.pdf.shop_monthly_report import build_shop_monthly_pdf
 from app.schemas.me import MeResponse
+from app.storage.supabase_storage import download_pdf_bytes
+
 
 router = APIRouter(prefix="/reports", tags=["reporting"])
 

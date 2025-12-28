@@ -3,6 +3,7 @@ from decimal import Decimal
 from fastapi import HTTPException
 
 
+
 def validate_tariff_rule(rule_type: str, rule: dict, share: dict | None = None) -> None:
     if not isinstance(rule, dict):
         raise HTTPException(status_code=400, detail="Invalid tariff rule format")
@@ -38,6 +39,10 @@ def _validate_bags_rule(rule: dict, share: dict) -> None:
         raise HTTPException(status_code=400, detail="Invalid price_per_2_bags")
     if cms_discount < 0:
         raise HTTPException(status_code=400, detail="Invalid cms_discount")
+    
+    # [NEW] Strict validation
+    if cms_discount > price_per_2_bags:
+        raise HTTPException(status_code=400, detail="CMS discount cannot exceed price")
 
 
 def _validate_order_amount_rule(rule: dict, share: dict) -> None:
@@ -64,14 +69,33 @@ def _validate_order_amount_rule(rule: dict, share: dict) -> None:
 def _validate_shares(rule: dict, share: dict) -> None:
     shares = rule.get("shares") if isinstance(rule.get("shares"), dict) else None
     shares = shares or share
+    
+    # [NEW] Strict validation: Check for unknown keys
     required_shares = {"client", "shop", "city", "admin_region"}
+    unknown_keys = set(shares.keys()) - required_shares
+    if unknown_keys:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid tariff rule: unknown share keys {unknown_keys}",
+        )
+
     if not required_shares.issubset(shares):
         raise HTTPException(
             status_code=400,
-            detail="Invalid tariff rule: invalid shares",
+            detail="Invalid tariff rule: missing share keys",
         )
 
-    total = sum(Decimal(str(value)) for value in shares.values())
+    total = Decimal("0")
+    for key, value in shares.items():
+        # [NEW] Strict validation: Check for negative shares
+        d_val = Decimal(str(value))
+        if d_val < 0:
+             raise HTTPException(
+                status_code=400,
+                detail=f"Invalid tariff rule: share '{key}' cannot be negative",
+            )
+        total += d_val
+
     if abs(total - Decimal("100")) > Decimal("0.01"):
         raise HTTPException(
             status_code=400,

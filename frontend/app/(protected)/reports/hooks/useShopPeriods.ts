@@ -8,6 +8,7 @@ export type ShopPeriodRow = {
   period_month: string
   frozen_at: string
   frozen_by: string
+  frozen_by_name?: string | null
   comment?: string | null
 }
 

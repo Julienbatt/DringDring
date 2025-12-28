@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { apiGet } from '@/lib/api' // Notre client API
 
@@ -8,14 +9,13 @@ export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const [apiData, setApiData] = useState<any>(null) // Pour afficher le resultat backend
+  const router = useRouter()
   const supabase = createClient()
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
-    setApiData(null)
-    
+
     // 1. Authentification Supabase
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
@@ -31,19 +31,18 @@ export default function LoginPage() {
     // 2. Si succes, on recupere le JWT
     const token = data.session?.access_token
     if (!token) {
-        alert("Pas de token recu !")
-        setLoading(false)
-        return
+      alert("Pas de token recu !")
+      setLoading(false)
+      return
     }
 
-    // 3. Appel au Backend FastAPI avec le token
+    // 3. Appel au Backend FastAPI avec le token pour verifier/chauffe
     try {
-        const identity = await apiGet('/me', token)
-        setApiData(identity) // Succes !
+      await apiGet('/me', token)
+      router.push('/dashboard')
     } catch (err: any) {
-        alert("Erreur Backend: " + err.message)
-    } finally {
-        setLoading(false)
+      alert("Erreur Backend: " + err.message)
+      setLoading(false)
     }
   }
 
@@ -52,7 +51,7 @@ export default function LoginPage() {
       <div className="w-full max-w-lg space-y-8 rounded-xl bg-white p-8 shadow-lg">
         <div className="text-center">
           <h2 className="text-3xl font-bold text-gray-900">DringDring Login</h2>
-          <p className="mt-2 text-sm text-gray-500">Test de connexion complet</p>
+          <p className="mt-2 text-sm text-gray-500">Portail de Connexion</p>
         </div>
 
         {/* Formulaire Login */}
@@ -76,16 +75,6 @@ export default function LoginPage() {
             {loading ? 'Connexion en cours...' : 'Se connecter'}
           </button>
         </form>
-
-        {/* Zone de resultat API */}
-        {apiData && (
-          <div className="mt-6 rounded-md bg-green-50 p-4 border border-green-200">
-            <h3 className="font-bold text-green-800">Succes backend !</h3>
-            <pre className="mt-2 overflow-auto text-xs text-green-900 bg-white p-2 rounded border">
-              {JSON.stringify(apiData, null, 2)}
-            </pre>
-          </div>
-        )}
       </div>
     </div>
   )

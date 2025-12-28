@@ -8,6 +8,8 @@ from app.routes import (
     reporting,
     me,
     clients,
+    shops,
+    billing,
 )
 
 app = FastAPI(title="DringDring Backend")
@@ -33,6 +35,9 @@ app.include_router(pricing.router, prefix="/api/v1")
 app.include_router(reporting.router, prefix="/api/v1")
 app.include_router(me.router, prefix="/api/v1")
 app.include_router(clients.router, prefix="/api/v1")
+app.include_router(shops.router, prefix="/api/v1")
+app.include_router(billing.router, prefix="/api/v1")
+
 
 if __name__ == "__main__":
     import uvicorn
