@@ -4,6 +4,7 @@ import hashlib
 from fastapi import HTTPException
 
 from app.db.session import get_db_connection
+from app.pdf.invoice_qr_bill import build_recipient_invoice_with_qr_bill
 from app.pdf.shop_monthly_report import build_shop_monthly_pdf
 from app.storage.supabase_storage import upload_pdf_bytes
 
@@ -36,10 +37,10 @@ def freeze_shop_billing_period(
         # Here we raise to matching existing behavior, or caller handles check.
         raise HTTPException(status_code=409, detail="Already frozen")
 
-    # 2. Fetch Shop Data
+    # 2. Fetch Shop Data (with address for QR bill)
     cur.execute(
         """
-        SELECT s.name, c.name, h.name
+        SELECT s.name, c.name, h.name, s.address, c.postal_code
         FROM shop s
         JOIN city c ON c.id = s.city_id
         LEFT JOIN hq h ON h.id = s.hq_id
@@ -50,7 +51,7 @@ def freeze_shop_billing_period(
     shop_row = cur.fetchone()
     if not shop_row:
         raise HTTPException(status_code=404, detail="Shop not found")
-    shop_name, shop_city, hq_name = shop_row
+    shop_name, shop_city, hq_name, shop_address, shop_postal_code = shop_row
 
     # 3. Fetch Deliveries
     cur.execute(
@@ -61,16 +62,17 @@ def freeze_shop_billing_period(
             l.city_name,
             l.bags,
             f.total_price,
-            f.share_shop,
+            f.share_admin_region,
             f.share_city
         FROM delivery d
         JOIN delivery_logistics l ON l.delivery_id = d.id
         JOIN delivery_financial f ON f.delivery_id = d.id
         WHERE d.shop_id = %s
-            AND date_trunc('month', d.delivery_date) = %s::date
+            AND d.delivery_date >= %s::date
+            AND d.delivery_date < (%s::date + INTERVAL '1 month')
         ORDER BY d.delivery_date
         """,
-        (shop_id, period_month),
+        (shop_id, period_month, period_month),
     )
     deliveries = cur.fetchall()
     if not deliveries:
@@ -84,16 +86,75 @@ def freeze_shop_billing_period(
     frozen_at = datetime.now(timezone.utc)
 
     # 5. Build PDF
-    pdf_buffer = build_shop_monthly_pdf(
-        shop_name=shop_name,
-        shop_city=shop_city,
-        hq_name=hq_name,
-        period_month=period_month,
-        frozen_at=frozen_at,
-        frozen_by=frozen_by_user_id,
-        frozen_by_name=frozen_by_email,
-        deliveries=deliveries,
-    )
+    is_independent = hq_name is None or "indep" in hq_name.lower()
+    if is_independent:
+        vat_rate = 0.081
+        cur.execute("SELECT to_regclass('public.app_settings')")
+        settings_table = cur.fetchone()
+        if settings_table and settings_table[0] is not None:
+            cur.execute(
+                """
+                SELECT value_numeric
+                FROM public.app_settings
+                WHERE key = 'vat_rate'
+                  AND effective_from <= %s
+                ORDER BY effective_from DESC
+                LIMIT 1
+                """,
+                (period_month,),
+            )
+            vat_row = cur.fetchone()
+            if vat_row and vat_row[0] is not None:
+                vat_rate = vat_row[0]
+
+        invoice_rows = [
+            (
+                delivery_date,
+                shop_name,
+                client_name,
+                city_name,
+                bags,
+                share_admin_region,
+            )
+            for (
+                delivery_date,
+                client_name,
+                city_name,
+                bags,
+                _total_price,
+                share_admin_region,
+                _share_city,
+            ) in deliveries
+        ]
+        
+        # Generate reference number (simple format for now)
+        reference = f"RF{period_month.strftime('%Y%m')}{shop_id[:8].upper()}"
+        
+        # Use new Swiss QR Bill compliant invoice
+        pdf_buffer = build_recipient_invoice_with_qr_bill(
+            recipient_label="Commerce",
+            recipient_name=shop_name,
+            recipient_street=shop_address,
+            recipient_postal_code=shop_postal_code,
+            recipient_city=shop_city,
+            period_month=period_month,
+            rows=invoice_rows,
+            vat_rate=vat_rate,
+            is_preview=False,
+            payment_message=f"Facturation commerce DringDring {period_month.strftime('%Y-%m')}",
+            reference=reference,
+        )
+    else:
+        pdf_buffer = build_shop_monthly_pdf(
+            shop_name=shop_name,
+            shop_city=shop_city,
+            hq_name=hq_name,
+            period_month=period_month,
+            frozen_at=frozen_at,
+            frozen_by=frozen_by_user_id,
+            frozen_by_name=frozen_by_email,
+            deliveries=deliveries,
+        )
     pdf_bytes = pdf_buffer.getvalue()
     pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()
     

@@ -221,7 +221,11 @@ export default function BillingPage() {
                                     <TableCell className="text-right">
                                         {row.is_frozen && (
                                             <Button variant="ghost" size="sm" asChild>
-                                                <a href={row.pdf_url} target="_blank" rel="noopener noreferrer">
+                                                <a
+                                                    href={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1'}/reports/shop-monthly-pdf?shop_id=${row.shop_id}&month=${selectedMonth}`}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                >
                                                     <FileText className="h-4 w-4" />
                                                 </a>
                                             </Button>

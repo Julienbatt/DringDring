@@ -315,9 +315,20 @@ export default function ShopReport() {
             <div className="flex items-center gap-2 rounded-full bg-orange-100 px-3 py-1">
               <span className="text-xs font-medium text-orange-700">Periode gelee</span>
               {currentFrozenPeriod && (
-                <span className="text-xs text-orange-600">
-                  (par {currentFrozenPeriod.frozen_by_name || 'Admin'} le {formatDate(currentFrozenPeriod.frozen_at)})
-                </span>
+                <>
+                  <span className="text-xs text-orange-600">
+                    (par {currentFrozenPeriod.frozen_by_name || 'Admin'} le {formatDate(currentFrozenPeriod.frozen_at)})
+                  </span>
+                  <a
+                    href={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1'}/reports/shop-monthly-pdf?shop_id=${currentFrozenPeriod.shop_id || ''}&month=${selectedMonth}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ml-2 flex items-center gap-1 rounded bg-white px-2 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-50 border border-blue-200"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" /><polyline points="14 2 14 8 20 8" /></svg>
+                    PDF
+                  </a>
+                </>
               )}
             </div>
           )}
