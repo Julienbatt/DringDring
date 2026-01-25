@@ -341,7 +341,7 @@ export default function DispatchPage() {
                                 const hasCourier = Boolean(delivery.courier_id)
                                 const canEdit = canEditDelivery(delivery)
                                 const canAssign = !isDelivered && !isCancelled
-                                const canCancel = !isDelivered && !isCancelled
+                                const canCancel = canEdit
                                 const statusText = isDelivered
                                     ? 'Livree'
                                     : hasCourier
