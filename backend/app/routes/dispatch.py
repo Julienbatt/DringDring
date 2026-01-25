@@ -93,6 +93,7 @@ def list_dispatch_deliveries(
                         l.bags as bags,
                         l.short_code as short_code,
                         st.status,
+                        st.updated_at AS status_updated_at,
                         d.courier_id,
                         co.first_name as courier_first_name,
                         co.last_name as courier_last_name,
@@ -104,7 +105,7 @@ def list_dispatch_deliveries(
                     LEFT JOIN client cl ON cl.id = d.client_id
                     LEFT JOIN courier co ON co.id = d.courier_id
                     LEFT JOIN LATERAL (
-                        SELECT status
+                        SELECT status, updated_at
                         FROM delivery_status
                         WHERE delivery_id = d.id
                         ORDER BY updated_at DESC

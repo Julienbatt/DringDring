@@ -24,6 +24,7 @@ type DispatchDelivery = {
     bags: number | null
     short_code: string | null
     status: string | null
+    status_updated_at?: string | null
     courier_id: string | null
 }
 
@@ -62,6 +63,7 @@ export default function DispatchPage() {
         bags: '',
         notes: ''
     })
+    const deliveryEditGraceHours = 48
 
     // Tabs State
     const [activeTab, setActiveTab] = useState<'todo' | 'assigned' | 'done'>('todo')
@@ -124,7 +126,7 @@ export default function DispatchPage() {
             // Update local state: assigned deliveries are immediately marked as delivered.
             setDeliveries(prev => prev.map(d =>
                 d.id === selectedDelivery.id
-                    ? { ...d, courier_id: courierId, status: 'delivered' }
+                    ? { ...d, courier_id: courierId, status: 'assigned' }
                     : d
             ))
 
@@ -221,6 +223,18 @@ export default function DispatchPage() {
         (d) => d.courier_id && !['delivered', 'cancelled'].includes(d.status || '')
     )
     const completedDeliveries = deliveries.filter((d) => ['delivered', 'cancelled'].includes(d.status || ''))
+
+    const canEditDelivery = (delivery: DispatchDelivery) => {
+        if (delivery.status === 'cancelled') return false
+        if (delivery.status === 'delivered') {
+            if (!delivery.status_updated_at) return false
+            const updated = new Date(delivery.status_updated_at)
+            if (Number.isNaN(updated.getTime())) return false
+            const grace = updated.getTime() + deliveryEditGraceHours * 60 * 60 * 1000
+            return Date.now() <= grace
+        }
+        return true
+    }
     const deliveriesToday = deliveries.filter((d) => isSameDay(d.delivery_date))
     const pendingToday = deliveriesToday.filter(
         (d) => !d.courier_id && !['delivered', 'cancelled'].includes(d.status || '')
@@ -312,11 +326,11 @@ export default function DispatchPage() {
                                 const isDelivered = delivery.status === 'delivered'
                                 const isCancelled = delivery.status === 'cancelled'
                                 const hasCourier = Boolean(delivery.courier_id)
-                                const canEdit = !isDelivered && !isCancelled
+                                const canEdit = canEditDelivery(delivery)
                                 const statusText = isDelivered
                                     ? 'Livree'
                                     : hasCourier
-                                        ? 'Assignee'
+                                        ? 'En cours'
                                         : 'Non assignee'
                                 const notesShort = delivery.notes ? delivery.notes.slice(0, 60) : ''
                                 return (
@@ -352,7 +366,7 @@ export default function DispatchPage() {
                                                 hasCourier ? 'bg-emerald-100 text-emerald-800' :
                                                     'bg-yellow-100 text-yellow-800'
                                                 }`}>
-                                                {isDelivered ? 'Livree' : hasCourier ? (assignedCourier?.name || 'Assigne') : 'Non assigne'}
+                                                {isDelivered ? 'Livree' : hasCourier ? 'En cours' : 'Non assigne'}
                                             </span>
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">

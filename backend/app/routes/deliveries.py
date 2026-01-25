@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal
 import csv
 import hashlib
@@ -29,6 +29,7 @@ from app.storage.supabase_storage import upload_pdf_bytes
 router = APIRouter(prefix="/deliveries", tags=["deliveries"])
 
 EDITABLE_STATUSES = {"created", "assigned"}
+DELIVERY_EDIT_GRACE_HOURS = 48
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -597,12 +598,13 @@ def list_shop_deliveries(
                     l.is_cms,
                     l.notes,
                     st.status,
+                    st.updated_at AS status_updated_at,
                     f.total_price,
                     f.share_admin_region
                 FROM delivery d
                 JOIN delivery_logistics l ON l.delivery_id = d.id
                 LEFT JOIN LATERAL (
-                    SELECT status
+                    SELECT status, updated_at
                     FROM delivery_status
                     WHERE delivery_id = d.id
                     ORDER BY updated_at DESC
@@ -1055,10 +1057,10 @@ def _parse_month(month):
         raise HTTPException(status_code=400, detail="Invalid month format") from exc
 
 
-def _get_latest_status(cur, delivery_id: str) -> str | None:
+def _get_latest_status(cur, delivery_id: str) -> tuple[str | None, datetime | None]:
     cur.execute(
         """
-        SELECT status
+        SELECT status, updated_at
         FROM delivery_status
         WHERE delivery_id = %s
         ORDER BY updated_at DESC
@@ -1067,7 +1069,9 @@ def _get_latest_status(cur, delivery_id: str) -> str | None:
         (delivery_id,),
     )
     row = cur.fetchone()
-    return row[0] if row else None
+    if not row:
+        return None, None
+    return row[0], row[1]
 
 
 def _is_period_frozen(cur, shop_id: str, period_month: date) -> bool:
@@ -1126,6 +1130,15 @@ def _assert_admin_delivery_access(cur, delivery_id: str, user: MeResponse) -> st
     return str(shop_id)
 
 
+def _can_edit_delivery(status: str | None, updated_at: datetime | None) -> bool:
+    if status in EDITABLE_STATUSES:
+        return True
+    if status == "delivered" and updated_at:
+        grace_until = updated_at + timedelta(hours=DELIVERY_EDIT_GRACE_HOURS)
+        return datetime.now(timezone.utc) <= grace_until
+    return False
+
+
 def _apply_delivery_update(
     *,
     cur,
@@ -1168,8 +1181,8 @@ def _apply_delivery_update(
     if str(delivery_shop_id) != str(shop_id):
         raise HTTPException(status_code=403, detail="Not in your shop")
 
-    status = _get_latest_status(cur, delivery_id)
-    if status not in EDITABLE_STATUSES:
+    status, status_updated_at = _get_latest_status(cur, delivery_id)
+    if not _can_edit_delivery(status, status_updated_at):
         raise HTTPException(status_code=409, detail="Delivery is locked")
 
     old_month = delivery_date.replace(day=1)
@@ -1326,8 +1339,8 @@ def _apply_delivery_cancel(
     if str(delivery_shop_id) != str(shop_id):
         raise HTTPException(status_code=403, detail="Not in your shop")
 
-    status = _get_latest_status(cur, delivery_id)
-    if status not in EDITABLE_STATUSES:
+    status, status_updated_at = _get_latest_status(cur, delivery_id)
+    if not _can_edit_delivery(status, status_updated_at):
         raise HTTPException(status_code=409, detail="Delivery is locked")
 
     if _is_period_frozen(cur, shop_id, delivery_date.replace(day=1)):

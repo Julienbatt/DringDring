@@ -100,17 +100,29 @@ const TABLE_LABELS: Record<string, string> = {
 }
 
 const EDITABLE_STATUSES = new Set(['created', 'assigned'])
+const DELIVERY_EDIT_GRACE_HOURS = 48
 
 function formatStatus(value: unknown) {
   const raw = String(value ?? '').toLowerCase()
   if (!raw) return '-'
   if (raw === 'created') return 'Creee'
-  if (raw === 'assigned') return 'Assignee'
+  if (raw === 'assigned') return 'En cours'
   if (raw === 'picked_up') return 'En cours'
   if (raw === 'delivered') return 'Livree'
   if (raw === 'issue') return 'Incident'
   if (raw === 'cancelled') return 'Annulee'
   return raw
+}
+
+function canEditDelivery(status: string, updatedAt?: string | null) {
+  if (EDITABLE_STATUSES.has(status)) return true
+  if (status === 'delivered' && updatedAt) {
+    const updated = new Date(updatedAt)
+    if (Number.isNaN(updated.getTime())) return false
+    const grace = updated.getTime() + DELIVERY_EDIT_GRACE_HOURS * 60 * 60 * 1000
+    return Date.now() <= grace
+  }
+  return false
 }
 
 type FormState = {
@@ -956,7 +968,7 @@ export default function ShopReport() {
                     <td className="border px-3 py-2 whitespace-nowrap">
                       {(() => {
                         const status = String(row.status || '')
-                        const canEdit = EDITABLE_STATUSES.has(status) && !isFrozen
+                        const canEdit = canEditDelivery(status, row.status_updated_at) && !isFrozen
                         return (
                           <div className="flex items-center gap-2">
                             <button
