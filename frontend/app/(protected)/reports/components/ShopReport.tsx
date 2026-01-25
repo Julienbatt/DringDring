@@ -462,7 +462,8 @@ export default function ShopReport() {
       }
       await refresh()
     } catch (e) {
-      setSubmitError("Impossible d'annuler la livraison")
+      const message = e instanceof Error ? e.message : "Impossible d'annuler la livraison"
+      setSubmitError(message)
     }
   }
 

@@ -191,7 +191,8 @@ export default function DispatchPage() {
                     : d
             )))
         } catch (err) {
-            alert("Erreur lors de l'annulation")
+            const message = err instanceof Error ? err.message : "Erreur lors de l'annulation"
+            alert(message)
         }
     }
 

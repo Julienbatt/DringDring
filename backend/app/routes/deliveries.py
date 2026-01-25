@@ -1134,6 +1134,8 @@ def _can_edit_delivery(status: str | None, updated_at: datetime | None) -> bool:
     if status in EDITABLE_STATUSES:
         return True
     if status == "delivered" and updated_at:
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
         grace_until = updated_at + timedelta(hours=DELIVERY_EDIT_GRACE_HOURS)
         return datetime.now(timezone.utc) <= grace_until
     return False
