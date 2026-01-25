@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta, time
 from decimal import Decimal
 import csv
 import hashlib
@@ -1130,13 +1130,21 @@ def _assert_admin_delivery_access(cur, delivery_id: str, user: MeResponse) -> st
     return str(shop_id)
 
 
-def _can_edit_delivery(status: str | None, updated_at: datetime | None) -> bool:
+def _can_edit_delivery(
+    status: str | None,
+    updated_at: datetime | None,
+    delivery_date: date | None,
+) -> bool:
     if status in EDITABLE_STATUSES:
         return True
     if status == "delivered" and updated_at:
         if updated_at.tzinfo is None:
             updated_at = updated_at.replace(tzinfo=timezone.utc)
         grace_until = updated_at + timedelta(hours=DELIVERY_EDIT_GRACE_HOURS)
+        return datetime.now(timezone.utc) <= grace_until
+    if status == "delivered" and delivery_date:
+        delivered_at = datetime.combine(delivery_date, time.min, tzinfo=timezone.utc)
+        grace_until = delivered_at + timedelta(hours=DELIVERY_EDIT_GRACE_HOURS)
         return datetime.now(timezone.utc) <= grace_until
     return False
 
@@ -1184,7 +1192,7 @@ def _apply_delivery_update(
         raise HTTPException(status_code=403, detail="Not in your shop")
 
     status, status_updated_at = _get_latest_status(cur, delivery_id)
-    if not _can_edit_delivery(status, status_updated_at):
+    if not _can_edit_delivery(status, status_updated_at, delivery_date):
         raise HTTPException(status_code=409, detail="Delivery is locked")
 
     old_month = delivery_date.replace(day=1)
@@ -1342,7 +1350,7 @@ def _apply_delivery_cancel(
         raise HTTPException(status_code=403, detail="Not in your shop")
 
     status, status_updated_at = _get_latest_status(cur, delivery_id)
-    if not _can_edit_delivery(status, status_updated_at):
+    if not _can_edit_delivery(status, status_updated_at, delivery_date):
         raise HTTPException(status_code=409, detail="Delivery is locked")
 
     if _is_period_frozen(cur, shop_id, delivery_date.replace(day=1)):

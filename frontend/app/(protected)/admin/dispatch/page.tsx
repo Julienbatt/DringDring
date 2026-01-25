@@ -228,10 +228,22 @@ export default function DispatchPage() {
     const canEditDelivery = (delivery: DispatchDelivery) => {
         if (delivery.status === 'cancelled') return false
         if (delivery.status === 'delivered') {
-            if (!delivery.status_updated_at) return false
-            const updated = new Date(delivery.status_updated_at)
-            if (Number.isNaN(updated.getTime())) return false
-            const grace = updated.getTime() + deliveryEditGraceHours * 60 * 60 * 1000
+            let base: Date | null = null
+            if (delivery.status_updated_at) {
+                const updated = new Date(delivery.status_updated_at)
+                if (!Number.isNaN(updated.getTime())) {
+                    base = updated
+                }
+            }
+            if (!base && delivery.delivery_date) {
+                const delivered = new Date(delivery.delivery_date)
+                if (!Number.isNaN(delivered.getTime())) {
+                    delivered.setHours(0, 0, 0, 0)
+                    base = delivered
+                }
+            }
+            if (!base) return false
+            const grace = base.getTime() + deliveryEditGraceHours * 60 * 60 * 1000
             return Date.now() <= grace
         }
         return true

@@ -114,12 +114,29 @@ function formatStatus(value: unknown) {
   return raw
 }
 
-function canEditDelivery(status: string, updatedAt?: string | null) {
+function canEditDelivery(
+  status: string,
+  updatedAt?: string | null,
+  deliveryDate?: string | null
+) {
   if (EDITABLE_STATUSES.has(status)) return true
-  if (status === 'delivered' && updatedAt) {
-    const updated = new Date(updatedAt)
-    if (Number.isNaN(updated.getTime())) return false
-    const grace = updated.getTime() + DELIVERY_EDIT_GRACE_HOURS * 60 * 60 * 1000
+  if (status === 'delivered') {
+    let base: Date | null = null
+    if (updatedAt) {
+      const updated = new Date(updatedAt)
+      if (!Number.isNaN(updated.getTime())) {
+        base = updated
+      }
+    }
+    if (!base && deliveryDate) {
+      const delivered = new Date(deliveryDate)
+      if (!Number.isNaN(delivered.getTime())) {
+        delivered.setHours(0, 0, 0, 0)
+        base = delivered
+      }
+    }
+    if (!base) return false
+    const grace = base.getTime() + DELIVERY_EDIT_GRACE_HOURS * 60 * 60 * 1000
     return Date.now() <= grace
   }
   return false
@@ -969,7 +986,7 @@ export default function ShopReport() {
                     <td className="border px-3 py-2 whitespace-nowrap">
                       {(() => {
                         const status = String(row.status || '')
-                        const canEdit = canEditDelivery(status, row.status_updated_at) && !isFrozen
+                        const canEdit = canEditDelivery(status, row.status_updated_at, row.delivery_date) && !isFrozen
                         return (
                           <div className="flex items-center gap-2">
                             <button
