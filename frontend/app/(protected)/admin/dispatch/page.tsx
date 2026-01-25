@@ -328,6 +328,8 @@ export default function DispatchPage() {
                                 const isCancelled = delivery.status === 'cancelled'
                                 const hasCourier = Boolean(delivery.courier_id)
                                 const canEdit = canEditDelivery(delivery)
+                                const canAssign = !isDelivered && !isCancelled
+                                const canCancel = !isDelivered && !isCancelled
                                 const statusText = isDelivered
                                     ? 'Livree'
                                     : hasCourier
@@ -371,36 +373,31 @@ export default function DispatchPage() {
                                             </span>
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
-                                            <button
-                                                onClick={() => handleAssignClick(delivery)}
-                                                className="text-emerald-600 hover:text-emerald-800"
-                                                disabled={!canEdit}
-                                            >
-                                                {delivery.courier_id ? 'Changer' : 'Assigner'}
-                                            </button>
-                                            <button
-                                                onClick={() => handleEditClick(delivery)}
-                                                className="text-blue-600 hover:text-blue-800"
-                                                disabled={!canEdit}
-                                            >
-                                                Modifier
-                                            </button>
-                                            <button
-                                                onClick={() => handleCancelDelivery(delivery)}
-                                                className="text-red-600 hover:text-red-800"
-                                                disabled={!canEdit}
-                                            >
-                                                Annuler
-                                            </button>
-                                            {assignedCourier && assignedCourier.phone_number && (
-                                                <a
-                                                    href={getWhatsAppLink(delivery, assignedCourier)}
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                    className="text-green-600 hover:text-green-900 font-bold"
+                                            {canAssign && (
+                                                <button
+                                                    onClick={() => handleAssignClick(delivery)}
+                                                    className="text-emerald-600 hover:text-emerald-800"
+                                                    disabled={!canEdit}
                                                 >
-                                                    WhatsApp
-                                                </a>
+                                                    {delivery.courier_id ? 'Changer' : 'Assigner'}
+                                                </button>
+                                            )}
+                                            {canEdit && (
+                                                <button
+                                                    onClick={() => handleEditClick(delivery)}
+                                                    className="text-blue-600 hover:text-blue-800"
+                                                >
+                                                    Modifier
+                                                </button>
+                                            )}
+                                            {canCancel && (
+                                                <button
+                                                    onClick={() => handleCancelDelivery(delivery)}
+                                                    className="text-red-600 hover:text-red-800"
+                                                    disabled={!canEdit}
+                                                >
+                                                    Annuler
+                                                </button>
                                             )}
                                         </td>
                                     </tr>
