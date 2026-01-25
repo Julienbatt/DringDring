@@ -5,6 +5,10 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useHqBilling } from '../../hq/hooks/useHqBilling'
 import { useHqBillingShops } from '../../hq/hooks/useHqBillingShops'
+import { API_BASE_URL } from '@/lib/api'
+import { useEcoStats } from '@/app/(protected)/hooks/useEcoStats'
+import { useAuth } from '@/app/(protected)/providers/AuthProvider'
+import { toast } from 'sonner'
 
 function formatCHF(value: number) {
   return `CHF ${value.toLocaleString('fr-CH', {
@@ -41,9 +45,9 @@ const DETAIL_COLUMNS_WITH_ACTIONS = [...DETAIL_COLUMNS, 'actions']
 
 const DETAIL_COLUMN_LABELS: Record<string, string> = {
   shop_name: 'Commerce',
-  city_name: 'Ville',
+  city_name: 'Commune partenaire',
   total_deliveries: 'Livraisons',
-  total_subvention_due: 'Subvention (CHF)',
+  total_subvention_due: 'Montant HQ (CHF)',
   total_volume_chf: 'Total CHF',
   actions: 'Action',
 }
@@ -54,8 +58,7 @@ async function downloadCsv(path: string, filename: string) {
   const session = sessionData.session
   if (!session) return
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL
-  if (!apiUrl) return
+  const apiUrl = API_BASE_URL
 
   const res = await fetch(`${apiUrl}${path}`, {
     headers: { Authorization: `Bearer ${session.access_token}` },
@@ -81,13 +84,17 @@ async function downloadPdf(path: string, filename: string) {
   const session = sessionData.session
   if (!session) return
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL
-  if (!apiUrl) return
+  const apiUrl = API_BASE_URL
 
   const res = await fetch(`${apiUrl}${path}`, {
     headers: { Authorization: `Bearer ${session.access_token}` },
   })
   if (!res.ok) {
+    const text = await res.text()
+    if (res.status === 409 && text.includes('not frozen')) {
+      toast.info('Periode non validee pour tous les commerces')
+      return
+    }
     throw new Error(`Export failed: ${res.status}`)
   }
 
@@ -117,17 +124,12 @@ export default function HqReport() {
   const [selectedMonth, setSelectedMonth] = useState(
     paramMonth ?? getCurrentMonth()
   )
-  const [freezeLoading, setFreezeLoading] = useState<string | null>(null)
-  const [freezeError, setFreezeError] = useState<string | null>(null)
-  const [freezeSuccess, setFreezeSuccess] = useState<string | null>(null)
+  const { data: ecoStats, loading: ecoLoading } = useEcoStats(selectedMonth)
+  const { user } = useAuth()
 
   const { data, loading, error } = useHqBilling(selectedMonth)
-  const {
-    data: shopData,
-    loading: shopLoading,
-    error: shopError,
-    refresh: refreshShops,
-  } = useHqBillingShops(selectedMonth)
+  const { data: shopData, loading: shopLoading, error: shopError } =
+    useHqBillingShops(selectedMonth)
 
   const handleMonthChange = (value: string) => {
     setSelectedMonth(value)
@@ -142,27 +144,37 @@ export default function HqReport() {
   if (error || shopError) {
     return <div className="p-8 text-red-600">{error ?? shopError}</div>
   }
-  if (!data || data.length === 0) {
+  const summaryRows = Array.isArray(data) ? data : data?.rows ?? []
+  const filteredRows =
+    user?.hq_id && Array.isArray(summaryRows)
+      ? summaryRows.filter((row) => row.hq_id === user.hq_id)
+      : summaryRows
+  const summaryMonth = Array.isArray(data) ? selectedMonth : data?.month ?? selectedMonth
+
+  if (!filteredRows || filteredRows.length === 0) {
     return <div className="p-8">Aucune donnee</div>
   }
 
-  const totalDeliveries = data.reduce(
+  const totalDeliveries = filteredRows.reduce(
     (sum, row) => sum + Number(row.total_deliveries ?? 0),
     0
   )
 
-  const totalSubvention = data.reduce(
+  const totalSubvention = filteredRows.reduce(
     (sum, row) => sum + Number(row.total_subvention_due ?? 0),
     0
   )
 
-  const totalVolume = data.reduce(
+  const totalVolume = filteredRows.reduce(
     (sum, row) => sum + Number(row.total_volume_chf ?? 0),
     0
   )
 
-  const hqName = data[0]?.hq_name ?? data[0]?.hq_id ?? 'Groupe'
+  const hqName = filteredRows[0]?.hq_name ?? filteredRows[0]?.hq_id ?? 'Groupe'
   const detailRows = shopData ?? []
+  const topShops = [...detailRows]
+    .sort((a, b) => Number(b.total_deliveries ?? 0) - Number(a.total_deliveries ?? 0))
+    .slice(0, 3)
 
   const handleExport = async () => {
     await downloadCsv(
@@ -174,63 +186,19 @@ export default function HqReport() {
   const handleHqPdf = async () => {
     const safeHq = hqName.replace(/[^a-zA-Z0-9_-]+/g, '_')
     await downloadPdf(
-      `/reports/hq-monthly-pdf?month=${encodeURIComponent(selectedMonth)}`,
-      `DringDring_HQ_${safeHq}_${selectedMonth}_FROZEN.pdf`
+      `/reports/hq-monthly-pdf?month=${encodeURIComponent(selectedMonth)}&allow_unfrozen=1`,
+      `DringDring_HQ_${safeHq}_${selectedMonth}.pdf`
     )
   }
 
   const handlePdf = async (shopId: string, shopName?: string) => {
-    const safeName = shopName ? shopName.replace(/[^a-zA-Z0-9_-]+/g, '_') : 'shop'
+    const safeName = shopName ? shopName.replace(/[^a-zA-Z0-9_-]+/g, '_') : 'commerce'
     await downloadPdf(
       `/reports/shop-monthly-pdf?shop_id=${encodeURIComponent(
         shopId
       )}&month=${encodeURIComponent(selectedMonth)}`,
-      `DringDring_Shop_${safeName}_${selectedMonth}_FROZEN.pdf`
+      `DringDring_Commerce_${safeName}_${selectedMonth}.pdf`
     )
-  }
-
-  const handleFreeze = async (shopId: string) => {
-    try {
-      setFreezeLoading(shopId)
-      setFreezeError(null)
-      setFreezeSuccess(null)
-
-      const supabase = createClient()
-      const { data: sessionData } = await supabase.auth.getSession()
-      const session = sessionData.session
-      if (!session) {
-        setFreezeError('Session inexistante')
-        return
-      }
-
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL
-      if (!apiUrl) {
-        setFreezeError('API_URL manquant')
-        return
-      }
-
-      const query = new URLSearchParams({
-        shop_id: shopId,
-        month: selectedMonth,
-      })
-      const res = await fetch(
-        `${apiUrl}/deliveries/shop/freeze?${query.toString()}`,
-        {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        }
-      )
-      if (!res.ok) {
-        throw new Error(`Freeze failed: ${res.status}`)
-      }
-
-      setFreezeSuccess('Periode gelee')
-      await refreshShops()
-    } catch (e: any) {
-      setFreezeError('Impossible de geler la periode')
-    } finally {
-      setFreezeLoading(null)
-    }
   }
 
   return (
@@ -241,7 +209,7 @@ export default function HqReport() {
             Facturation - Groupe {hqName}
           </h1>
           <p className="text-sm text-gray-500">
-            Periode : {formatMonth(selectedMonth)}
+            Periode : {formatMonth(summaryMonth)}
           </p>
         </div>
 
@@ -266,7 +234,7 @@ export default function HqReport() {
         </div>
 
         <div className="rounded-lg border p-4">
-          <div className="text-sm text-gray-500">Subvention communale</div>
+          <div className="text-sm text-gray-500">Montant HQ</div>
           <div className="text-2xl font-semibold">
             {formatCHF(totalSubvention)}
           </div>
@@ -277,6 +245,39 @@ export default function HqReport() {
           <div className="text-2xl font-semibold">
             {formatCHF(totalVolume)}
           </div>
+        </div>
+      </section>
+
+      <section className="rounded-lg border p-4">
+        <div className="text-sm font-medium text-gray-700">Top commerces du mois</div>
+        {topShops.length === 0 ? (
+          <div className="text-sm text-gray-500 mt-2">Aucun commerce actif.</div>
+        ) : (
+          <div className="mt-3 space-y-2">
+            {topShops.map((shop) => (
+              <div key={shop.shop_id} className="flex items-center justify-between text-sm">
+                <div className="text-gray-700">{shop.shop_name}</div>
+                <div className="font-medium text-gray-900">{shop.total_deliveries} livraisons</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="rounded-lg border p-4">
+          <div className="text-sm text-gray-500">Km a velo (mois)</div>
+          <div className="text-2xl font-semibold">
+            {ecoLoading || !ecoStats ? '-' : ecoStats.distance_km.toFixed(1)}
+          </div>
+          <div className="text-xs text-gray-400">Estimation aller-retour</div>
+        </div>
+        <div className="rounded-lg border p-4">
+          <div className="text-sm text-gray-500">CO2 economise (kg)</div>
+          <div className="text-2xl font-semibold">
+            {ecoLoading || !ecoStats ? '-' : ecoStats.co2_saved_kg.toFixed(1)}
+          </div>
+          <div className="text-xs text-gray-400">Base voiture 93.6 g/km</div>
         </div>
       </section>
 
@@ -301,13 +302,6 @@ export default function HqReport() {
             </button>
           </div>
         </div>
-        {freezeError && (
-          <div className="text-sm text-red-600">{freezeError}</div>
-        )}
-        {freezeSuccess && (
-          <div className="text-sm text-green-600">{freezeSuccess}</div>
-        )}
-
         {detailRows.length === 0 ? (
           <div className="text-sm text-gray-500">Aucun detail disponible.</div>
         ) : (
@@ -332,53 +326,26 @@ export default function HqReport() {
                     {DETAIL_COLUMNS_WITH_ACTIONS.map((col) => {
                       if (col === 'actions') {
                         const shopId = row.shop_id
-                        const isFrozen = Boolean(row.is_frozen)
-                        const disabled =
-                          !shopId || freezeLoading === shopId || isFrozen
+                        const isAvailable = Boolean(row.is_frozen)
                         return (
                           <td
                             key={col}
                             className="border px-3 py-2 whitespace-nowrap"
                           >
-                            {isFrozen && (
-                              <div className="mb-1 inline-flex rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-medium text-orange-700">
-                                Periode gelee
-                              </div>
-                            )}
                             <button
                               className="text-xs text-blue-600 hover:underline disabled:text-gray-400"
-                              disabled={disabled}
-                              onClick={() => handleFreeze(String(shopId))}
+                              disabled={!shopId || !isAvailable}
+                              onClick={() =>
+                                handlePdf(String(shopId), row.shop_name)
+                              }
                               title={
-                                shopId
-                                  ? isFrozen
-                                    ? 'Periode deja gelee'
-                                    : 'Geler la periode'
-                                  : 'Shop id indisponible'
+                                isAvailable
+                                  ? 'Exporter le PDF'
+                                  : 'Document indisponible'
                               }
                             >
-                              {freezeLoading === shopId
-                                ? 'Gel...'
-                                : isFrozen
-                                ? 'Periode gelee'
-                                : 'Geler ce mois'}
+                              Telecharger PDF
                             </button>
-                            <div className="mt-1">
-                              <button
-                                className="text-xs text-blue-600 hover:underline disabled:text-gray-400"
-                                disabled={!shopId || !isFrozen}
-                                onClick={() =>
-                                  handlePdf(String(shopId), row.shop_name)
-                                }
-                                title={
-                                  isFrozen
-                                    ? 'Exporter le PDF'
-                                    : 'Periode non gelee'
-                                }
-                              >
-                                Telecharger PDF
-                              </button>
-                            </div>
                           </td>
                         )
                       }

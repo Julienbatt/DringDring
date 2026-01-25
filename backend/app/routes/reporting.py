@@ -5,14 +5,20 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 
-from app.core.guards import require_city_user, require_hq_or_admin_user, require_hq_user
+from app.core.guards import (
+    require_admin_user,
+    require_city_user,
+    require_hq_or_admin_user,
+    require_hq_user,
+)
 from app.core.identity import resolve_identity
 from app.core.security import get_current_user, get_current_user_claims
 from app.db.session import get_db_connection
-from app.pdf.city_monthly_report import build_city_monthly_pdf
-from app.pdf.hq_monthly_report import build_hq_monthly_pdf
+from app.pdf.client_monthly_report import build_client_monthly_pdf
+from app.pdf.invoice_report import build_recipient_invoice_pdf
 from app.pdf.shop_monthly_report import build_shop_monthly_pdf
 from app.schemas.me import MeResponse
 from app.storage.supabase_storage import download_pdf_bytes
@@ -69,75 +75,888 @@ def get_city_billing_shops(
             return _rows_to_dicts(cur)
 
 
-@router.get("/hq-billing")
-def get_hq_billing(
-    user: MeResponse = Depends(require_hq_or_admin_user),
+@router.get("/city-billing-deliveries")
+def get_city_billing_deliveries(
+    city_id: str,
+    user=Depends(get_current_user),
     jwt_claims: str = Depends(get_current_user_claims),
-    month: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
 ):
     """
-    HQ official billing status by shop for a single month.
+    Returns detailed deliveries for a city and month.
+    """
+    identity = resolve_identity(
+        user_id=user.user_id,
+        email=user.email,
+        jwt_claims=jwt_claims,
+    )
+
+    with get_db_connection(jwt_claims) as conn:
+        with conn.cursor() as cur:
+            if identity.role == "city":
+                if not identity.city_id or str(identity.city_id) != str(city_id):
+                    raise HTTPException(status_code=403, detail="City access required")
+            elif identity.role == "hq":
+                if not identity.hq_id:
+                    raise HTTPException(status_code=400, detail="HQ id missing")
+                cur.execute(
+                    """
+                    SELECT 1
+                    FROM shop s
+                    WHERE s.city_id = %s
+                      AND s.hq_id = %s
+                    LIMIT 1
+                    """,
+                    (city_id, str(identity.hq_id)),
+                )
+                if not cur.fetchone():
+                    raise HTTPException(status_code=403, detail="City access required")
+            elif identity.role == "admin_region":
+                if not identity.admin_region_id:
+                    raise HTTPException(status_code=400, detail="Admin region id missing")
+                cur.execute(
+                    """
+                    SELECT 1
+                    FROM city
+                    WHERE id = %s
+                      AND admin_region_id = %s
+                    """,
+                    (city_id, str(identity.admin_region_id)),
+                )
+                if not cur.fetchone():
+                    raise HTTPException(status_code=403, detail="City access required")
+            elif identity.role != "super_admin":
+                raise HTTPException(status_code=403, detail="City access required")
+
+            month_date = _parse_month(month)
+            cur.execute(
+                """
+                SELECT
+                    d.id AS delivery_id,
+                    d.delivery_date,
+                    s.id AS shop_id,
+                    s.name AS shop_name,
+                    s.hq_id AS hq_id,
+                    c.name AS city_name,
+                    l.client_name,
+                    l.address,
+                    l.postal_code,
+                    l.city_name AS delivery_city,
+                    l.bags,
+                    l.time_window,
+                    f.total_price,
+                    f.share_admin_region,
+                    f.share_city,
+                    f.share_client
+                FROM delivery d
+                JOIN shop s ON s.id = d.shop_id
+                JOIN city c ON c.id = s.city_id
+                JOIN delivery_logistics l ON l.delivery_id = d.id
+                LEFT JOIN delivery_financial f ON f.delivery_id = d.id
+                WHERE s.city_id = %s
+                  AND date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                ORDER BY s.name, d.delivery_date
+                """,
+                (city_id, month_date),
+            )
+            return _rows_to_dicts(cur)
+
+
+@router.get("/hq-billing/zip")
+def get_hq_billing_zip(
+    user: MeResponse = Depends(require_hq_user),
+    jwt_claims: str = Depends(get_current_user_claims),
+    month: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    preview: bool = Query(default=False),
+):
+    """
+    Download a ZIP containing all frozen shop PDFs for the HQ for a specific month.
     """
     month_date = _parse_month(month)
 
     with get_db_connection(jwt_claims) as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                WITH period AS (
-                    SELECT date_trunc('month', %s::date)::date AS month
+            if preview:
+                cur.execute(
+                    """
+                    SELECT s.id, s.name, c.name
+                    FROM shop s
+                    JOIN city c ON c.id = s.city_id
+                    JOIN delivery d ON d.shop_id = s.id
+                    WHERE s.hq_id = %s
+                      AND date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                    GROUP BY s.id, s.name, c.name
+                    ORDER BY s.name
+                    """,
+                    (str(user.hq_id), month_date),
                 )
-                SELECT
-                    s.id AS shop_id,
-                    s.name AS shop_name,
-                    c.name AS city_name,
-                    COUNT(d.id) AS total_deliveries,
-                    COALESCE(SUM(l.bags), 0) AS total_bags,
-                    COALESCE(SUM(f.total_price), 0) AS total_amount,
-                    bp.id IS NOT NULL AS is_frozen,
-                    bp.frozen_at,
-                    bp.frozen_by,
-                    COALESCE(bp.frozen_by_name, u.email) AS frozen_by_email,
-                    bp.pdf_url,
-                    bp.pdf_sha256
-                FROM shop s
-                JOIN city c ON c.id = s.city_id
-                LEFT JOIN delivery d
-                  ON d.shop_id = s.id
-                 AND date_trunc('month', d.delivery_date) = (SELECT month FROM period)
-                LEFT JOIN delivery_logistics l ON l.delivery_id = d.id
-                LEFT JOIN delivery_financial f ON f.delivery_id = d.id
-                LEFT JOIN billing_period bp
-                  ON bp.shop_id = s.id
-                 AND bp.period_month = (SELECT month FROM period)
-                LEFT JOIN auth.users u ON u.id = bp.frozen_by
-                GROUP BY
-                    s.id,
-                    s.name,
-                    c.name,
-                    bp.id,
-                    bp.frozen_at,
-                    bp.frozen_by,
-                    bp.frozen_by_name,
-                    u.email,
-                    bp.pdf_url,
-                    bp.pdf_sha256
-                ORDER BY c.name, s.name
-                """,
-                (month_date,),
+                shops = cur.fetchall()
+                if not shops:
+                    raise HTTPException(status_code=404, detail="No deliveries for this period")
+
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                    for shop_id, shop_name, shop_city in shops:
+                        try:
+                            cur.execute(
+                                """
+                                SELECT
+                                    d.delivery_date,
+                                    l.client_name,
+                                    l.city_name,
+                                    l.bags,
+                                    f.total_price,
+                                    f.share_admin_region,
+                                    f.share_city
+                                FROM delivery d
+                                JOIN delivery_logistics l ON l.delivery_id = d.id
+                                JOIN delivery_financial f ON f.delivery_id = d.id
+                                WHERE d.shop_id = %s
+                                  AND d.delivery_date >= %s::date
+                                  AND d.delivery_date < (%s::date + INTERVAL '1 month')
+                                ORDER BY d.delivery_date
+                                """,
+                                (shop_id, month_date, month_date),
+                            )
+                            deliveries = cur.fetchall()
+                            if not deliveries:
+                                zip_file.writestr(
+                                    f"EMPTY_{shop_name}.txt",
+                                    "No deliveries for this period.",
+                                )
+                                continue
+                            pdf_buffer = build_shop_monthly_pdf(
+                                shop_name=shop_name,
+                                shop_city=shop_city,
+                                hq_name=None,
+                                period_month=month_date,
+                                frozen_at=None,
+                                frozen_by=None,
+                                frozen_by_name=None,
+                                deliveries=deliveries,
+                                is_preview=True,
+                            )
+                            safe_shop = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in shop_name)
+                            filename = f"{safe_shop}_{month}_PREVIEW.pdf"
+                            zip_file.writestr(filename, pdf_buffer.getvalue())
+                        except Exception as e:
+                            zip_file.writestr(f"ERROR_{shop_name}.txt", f"Could not generate PDF: {str(e)}")
+            else:
+                # 1. Select all frozen PDFs for this HQ/Month
+                cur.execute(
+                    """
+                    SELECT
+                        s.name,
+                        bp.pdf_url
+                    FROM view_hq_billing_shops v
+                    JOIN shop s ON s.id = v.shop_id
+                    JOIN billing_period bp
+                      ON bp.shop_id = s.id
+                     AND bp.period_month = v.billing_month
+                    WHERE date_trunc('month', v.billing_month) = date_trunc('month', %s::date)
+                      AND bp.pdf_url IS NOT NULL
+                    """,
+                    (month_date,),
+                )
+                rows = cur.fetchall()
+
+                if not rows:
+                    raise HTTPException(status_code=404, detail="No billing documents found for this period")
+
+                # 2. Build ZIP
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                    for shop_name, pdf_url in rows:
+                        try:
+                            # Fetch PDF bytes from storage
+                            # pdf_url is the path inside 'billing-pdf' bucket
+                            pdf_bytes = download_pdf_bytes(bucket="billing-pdf", path=pdf_url)
+                            
+                            safe_shop = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in shop_name)
+                            filename = f"{safe_shop}_{month}.pdf"
+                            
+                            zip_file.writestr(filename, pdf_bytes)
+                        except Exception as e:
+                            print(f"Error zipping PDF for {shop_name}: {e}")
+                            # We might want to continue or fail. Let's add a placeholder error file
+                            zip_file.writestr(f"ERROR_{shop_name}.txt", f"Could not retrieve PDF: {str(e)}")
+
+            zip_buffer.seek(0)
+            
+            filename = f"Billing_HQ_{month}.zip"
+            return StreamingResponse(
+                zip_buffer,
+                media_type="application/zip",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{filename}"',
+                },
             )
-            rows = _rows_to_dicts(cur)
 
-    for row in rows:
-        frozen_by_id = row.pop("frozen_by", None)
-        frozen_by_email = row.pop("frozen_by_email", None)
-        row["frozen_by"] = (
-            {"id": frozen_by_id, "email": frozen_by_email}
-            if row.get("is_frozen")
-            else None
-        )
 
-    return {"month": month, "rows": rows}
+@router.get("/admin-billing/zip")
+def get_admin_billing_zip(
+    user: MeResponse = Depends(require_admin_user),
+    jwt_claims: str = Depends(get_current_user_claims),
+    month: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    admin_region_id: str | None = Query(default=None),
+    preview: bool = Query(default=False),
+):
+    """
+    Download a ZIP of all frozen shop PDFs for an admin region.
+    """
+    month_date = _parse_month(month)
+
+    if user.role != "super_admin":
+        if not user.admin_region_id:
+            raise HTTPException(status_code=400, detail="Admin region id missing")
+        target_region_id = str(user.admin_region_id)
+    else:
+        target_region_id = str(admin_region_id) if admin_region_id else None
+
+    with get_db_connection(jwt_claims) as conn:
+        with conn.cursor() as cur:
+            if preview:
+                vat_rate = _get_vat_rate(cur, month_date)
+                if target_region_id:
+                    cur.execute(
+                        """
+                        SELECT s.id, s.name, c.name
+                        FROM shop s
+                        JOIN city c ON c.id = s.city_id
+                        JOIN delivery d ON d.shop_id = s.id
+                        WHERE date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                          AND c.admin_region_id = %s
+                          AND s.hq_id IS NULL
+                        GROUP BY s.id, s.name, c.name
+                        ORDER BY s.name
+                        """,
+                        (month_date, target_region_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT s.id, s.name, c.name
+                        FROM shop s
+                        JOIN city c ON c.id = s.city_id
+                        JOIN delivery d ON d.shop_id = s.id
+                        WHERE date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                          AND s.hq_id IS NULL
+                        GROUP BY s.id, s.name, c.name
+                        ORDER BY s.name
+                        """,
+                        (month_date,),
+                    )
+                shops = cur.fetchall()
+                if not shops:
+                    raise HTTPException(status_code=404, detail="No deliveries for this period")
+
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                    for shop_id, shop_name, shop_city in shops:
+                        try:
+                            cur.execute(
+                                """
+                                SELECT
+                                    d.delivery_date,
+                                    l.client_name,
+                                    l.city_name,
+                                    l.bags,
+                                    f.total_price,
+                                    f.share_admin_region,
+                                    f.share_city
+                                FROM delivery d
+                                JOIN delivery_logistics l ON l.delivery_id = d.id
+                                JOIN delivery_financial f ON f.delivery_id = d.id
+                                WHERE d.shop_id = %s
+                                  AND d.delivery_date >= %s::date
+                                  AND d.delivery_date < (%s::date + INTERVAL '1 month')
+                                ORDER BY d.delivery_date
+                                """,
+                                (shop_id, month_date, month_date),
+                            )
+                            deliveries = cur.fetchall()
+                            if not deliveries:
+                                zip_file.writestr(
+                                    f"EMPTY_{shop_name}.txt",
+                                    "No deliveries for this period.",
+                                )
+                                continue
+                            invoice_rows = [
+                                (
+                                    delivery_date,
+                                    shop_name,
+                                    client_name,
+                                    city_label,
+                                    bags,
+                                    share_admin_region,
+                                )
+                                for (
+                                    delivery_date,
+                                    client_name,
+                                    city_label,
+                                    bags,
+                                    _total_price,
+                                    share_admin_region,
+                                    _share_city,
+                                ) in deliveries
+                            ]
+                            pdf_buffer = build_recipient_invoice_pdf(
+                                recipient_label="Commerce",
+                                recipient_name=shop_name,
+                                period_month=month_date,
+                                rows=invoice_rows,
+                                vat_rate=vat_rate,
+                                is_preview=True,
+                                payment_message=f"Facturation commerce DringDring {month_date.strftime('%Y-%m')}",
+                            )
+                            safe_shop = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in shop_name)
+                            filename = f"{safe_shop}_{month}_PREVIEW.pdf"
+                            zip_file.writestr(filename, pdf_buffer.getvalue())
+                        except Exception as e:
+                            zip_file.writestr(
+                                f"ERROR_{shop_name}.txt",
+                                f"Could not generate PDF: {str(e)}",
+                            )
+            else:
+                if target_region_id:
+                    cur.execute(
+                        """
+                        SELECT s.id, s.name, c.name
+                        FROM shop s
+                        JOIN city c ON c.id = s.city_id
+                        JOIN billing_period bp
+                          ON bp.shop_id = s.id
+                         AND bp.period_month = %s
+                        WHERE c.admin_region_id = %s
+                          AND s.hq_id IS NULL
+                        """,
+                        (month_date, target_region_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT s.id, s.name, c.name
+                        FROM shop s
+                        JOIN city c ON c.id = s.city_id
+                        JOIN billing_period bp
+                          ON bp.shop_id = s.id
+                         AND bp.period_month = %s
+                        WHERE s.hq_id IS NULL
+                        """,
+                        (month_date,),
+                    )
+                shops = cur.fetchall()
+
+                if not shops:
+                    raise HTTPException(status_code=404, detail="No billing documents found for this period")
+
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                    vat_rate = _get_vat_rate(cur, month_date)
+                    for shop_id, shop_name, shop_city in shops:
+                        try:
+                            cur.execute(
+                                """
+                                SELECT
+                                    d.delivery_date,
+                                    l.client_name,
+                                    l.city_name,
+                                    l.bags,
+                                    f.total_price,
+                                    f.share_admin_region,
+                                    f.share_city
+                                FROM delivery d
+                                JOIN delivery_logistics l ON l.delivery_id = d.id
+                                JOIN delivery_financial f ON f.delivery_id = d.id
+                                WHERE d.shop_id = %s
+                                  AND d.delivery_date >= %s::date
+                                  AND d.delivery_date < (%s::date + INTERVAL '1 month')
+                                ORDER BY d.delivery_date
+                                """,
+                                (shop_id, month_date, month_date),
+                            )
+                            deliveries = cur.fetchall()
+                            if not deliveries:
+                                zip_file.writestr(
+                                    f"EMPTY_{shop_name}.txt",
+                                    "No deliveries for this period.",
+                                )
+                                continue
+                            invoice_rows = [
+                                (
+                                    delivery_date,
+                                    shop_name,
+                                    client_name,
+                                    city_label,
+                                    bags,
+                                    share_admin_region,
+                                )
+                                for (
+                                    delivery_date,
+                                    client_name,
+                                    city_label,
+                                    bags,
+                                    _total_price,
+                                    share_admin_region,
+                                    _share_city,
+                                ) in deliveries
+                            ]
+                            pdf_buffer = build_recipient_invoice_pdf(
+                                recipient_label="Commerce",
+                                recipient_name=shop_name,
+                                period_month=month_date,
+                                rows=invoice_rows,
+                                vat_rate=vat_rate,
+                                is_preview=False,
+                                payment_message=f"Facturation commerce DringDring {month_date.strftime('%Y-%m')}",
+                            )
+                            safe_shop = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in shop_name)
+                            filename = f"{safe_shop}_{month}.pdf"
+                            zip_file.writestr(filename, pdf_buffer.getvalue())
+                        except Exception as e:
+                            zip_file.writestr(
+                                f"ERROR_{shop_name}.txt",
+                                f"Could not generate PDF: {str(e)}",
+                            )
+
+            zip_buffer.seek(0)
+            filename = f"Billing_Admin_{month}.zip"
+            return StreamingResponse(
+                zip_buffer,
+                media_type="application/zip",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{filename}"',
+                },
+            )
+
+
+@router.get("/city-billing/zip")
+def get_city_billing_zip(
+    user: MeResponse = Depends(require_admin_user),
+    jwt_claims: str = Depends(get_current_user_claims),
+    month: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    admin_region_id: str | None = Query(default=None),
+    preview: bool = Query(default=False),
+):
+    """
+    Download a ZIP of all city (commune) PDFs for an admin region.
+    """
+    month_date = _parse_month(month)
+
+    if user.role != "super_admin":
+        if not user.admin_region_id:
+            raise HTTPException(status_code=400, detail="Admin region id missing")
+        target_region_id = str(user.admin_region_id)
+    else:
+        target_region_id = str(admin_region_id) if admin_region_id else None
+
+    with get_db_connection(jwt_claims) as conn:
+        with conn.cursor() as cur:
+            vat_rate = _get_vat_rate(cur, month_date)
+            if target_region_id:
+                cur.execute(
+                    """
+                    SELECT DISTINCT c.id, c.name
+                    FROM city c
+                    JOIN shop s ON s.city_id = c.id
+                    JOIN delivery d ON d.shop_id = s.id
+                    WHERE date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                      AND c.admin_region_id = %s
+                    ORDER BY c.name
+                    """,
+                    (month_date, target_region_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT DISTINCT c.id, c.name
+                    FROM city c
+                    JOIN shop s ON s.city_id = c.id
+                    JOIN delivery d ON d.shop_id = s.id
+                    WHERE date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                    ORDER BY c.name
+                    """,
+                    (month_date,),
+                )
+            cities = cur.fetchall()
+
+            if not cities:
+                raise HTTPException(status_code=404, detail="No city billing documents found for this period")
+
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                for city_id, city_name in cities:
+                    try:
+                        if not preview:
+                            _assert_city_period_fully_frozen(cur, city_id, month_date)
+                        cur.execute(
+                            """
+                            SELECT
+                                s.id AS shop_id,
+                                s.name AS shop_name,
+                                d.delivery_date,
+                                l.client_name,
+                                l.city_name,
+                                l.bags,
+                                f.total_price,
+                                f.share_city,
+                                f.share_admin_region
+                            FROM delivery d
+                            JOIN shop s ON s.id = d.shop_id
+                            JOIN delivery_logistics l ON l.delivery_id = d.id
+                            JOIN delivery_financial f ON f.delivery_id = d.id
+                            WHERE s.city_id = %s
+                              AND date_trunc('month', d.delivery_date) = %s::date
+                            ORDER BY s.name, d.delivery_date
+                            """,
+                            (city_id, month_date),
+                        )
+                        rows = cur.fetchall()
+                        if not rows:
+                            zip_file.writestr(
+                                f"EMPTY_{city_name}.txt",
+                                "No deliveries for this period.",
+                            )
+                            continue
+                        invoice_rows = [
+                            (
+                                delivery_date,
+                                shop_name,
+                                client_name,
+                                city_label,
+                                bags,
+                                share_city,
+                            )
+                            for (
+                                _shop_id,
+                                shop_name,
+                                delivery_date,
+                                client_name,
+                                city_label,
+                                bags,
+                                _total_price,
+                                share_city,
+                                _share_admin_region,
+                            ) in rows
+                        ]
+                        pdf_buffer = build_recipient_invoice_pdf(
+                            recipient_label="Commune partenaire",
+                            recipient_name=city_name,
+                            period_month=month_date,
+                            rows=invoice_rows,
+                            vat_rate=vat_rate,
+                            is_preview=preview,
+                            payment_message=f"Facturation commune DringDring {month_date.strftime('%Y-%m')}",
+                        )
+                        safe_city = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in city_name)
+                        filename = f"{safe_city}_{month}.pdf"
+                        zip_file.writestr(filename, pdf_buffer.getvalue())
+                    except Exception as exc:
+                        zip_file.writestr(
+                            f"ERROR_{city_name}.txt",
+                            f"Could not generate PDF: {str(exc)}",
+                        )
+
+            zip_buffer.seek(0)
+            filename = f"Billing_Cities_{month}.zip"
+            return StreamingResponse(
+                zip_buffer,
+                media_type="application/zip",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{filename}"',
+                },
+            )
+
+
+@router.get("/client-billing/zip")
+def get_client_billing_zip(
+    user: MeResponse = Depends(require_admin_user),
+    jwt_claims: str = Depends(get_current_user_claims),
+    month: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    admin_region_id: str | None = Query(default=None),
+    preview: bool = Query(default=False),
+):
+    """
+    Download a ZIP of client PDFs for an admin region.
+    """
+    month_date = _parse_month(month)
+
+    if user.role != "super_admin":
+        if not user.admin_region_id:
+            raise HTTPException(status_code=400, detail="Admin region id missing")
+        target_region_id = str(user.admin_region_id)
+    else:
+        target_region_id = str(admin_region_id) if admin_region_id else None
+
+    with get_db_connection(jwt_claims) as conn:
+        with conn.cursor() as cur:
+            vat_rate = _get_vat_rate(cur, month_date)
+            if target_region_id:
+                cur.execute(
+                    """
+                    SELECT DISTINCT c.id, c.name, c.address, c.postal_code, c.city_name
+                    FROM client c
+                    JOIN city ct ON ct.id = c.city_id
+                    JOIN delivery d ON d.client_id = c.id
+                    WHERE date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                      AND ct.admin_region_id = %s
+                    ORDER BY c.name
+                    """,
+                    (month_date, target_region_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT DISTINCT c.id, c.name, c.address, c.postal_code, c.city_name
+                    FROM client c
+                    JOIN delivery d ON d.client_id = c.id
+                    WHERE date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                    ORDER BY c.name
+                    """,
+                    (month_date,),
+                )
+            clients = cur.fetchall()
+
+            if not clients:
+                raise HTTPException(status_code=404, detail="No client billing documents found for this period")
+
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                for client_id, client_name, client_address, postal_code, city_name in clients:
+                    try:
+                        cur.execute(
+                            """
+                            SELECT
+                                d.delivery_date,
+                                s.name AS shop_name,
+                                l.bags,
+                                f.total_price,
+                                f.share_client
+                            FROM delivery d
+                            JOIN shop s ON s.id = d.shop_id
+                            JOIN delivery_logistics l ON l.delivery_id = d.id
+                            JOIN delivery_financial f ON f.delivery_id = d.id
+                            WHERE d.client_id = %s
+                              AND date_trunc('month', d.delivery_date) = %s::date
+                            ORDER BY d.delivery_date
+                            """,
+                            (client_id, month_date),
+                        )
+                        rows = cur.fetchall()
+                        if not rows:
+                            zip_file.writestr(
+                                f"EMPTY_{client_name}.txt",
+                                "No deliveries for this period.",
+                            )
+                            continue
+                        pdf_buffer = build_client_monthly_pdf(
+                            client_name=client_name,
+                            client_address=client_address,
+                            client_postal_code=postal_code,
+                            client_city=city_name,
+                            period_month=month_date,
+                            deliveries=rows,
+                            vat_rate=vat_rate,
+                            is_preview=preview,
+                        )
+                        safe_client = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in client_name)
+                        filename = f"{safe_client}_{month}.pdf"
+                        zip_file.writestr(filename, pdf_buffer.getvalue())
+                    except Exception as exc:
+                        zip_file.writestr(
+                            f"ERROR_{client_name}.txt",
+                            f"Could not generate PDF: {str(exc)}",
+                        )
+
+            zip_buffer.seek(0)
+            filename = f"Billing_Clients_{month}.zip"
+            return StreamingResponse(
+                zip_buffer,
+                media_type="application/zip",
+                headers={
+                    "Content-Disposition": f'attachment; filename=\"{filename}\"',
+                },
+            )
+
+
+@router.get("/hq-billing")
+def get_hq_billing(
+    user: MeResponse = Depends(require_hq_or_admin_user),
+    jwt_claims: str = Depends(get_current_user_claims),
+    month: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    admin_region_id: str | None = Query(default=None),
+):
+    """
+    HQ official billing status by shop for a single month.
+    """
+    try:
+        month_date = _parse_month(month)
+
+        filter_clause = ""
+        filter_params: list[str] = []
+        amount_expr = "SUM(f.total_price)"
+        if user.role == "hq":
+            if not user.hq_id:
+                raise HTTPException(status_code=400, detail="HQ id missing")
+            filter_clause = "WHERE s.hq_id = %s"
+            filter_params.append(str(user.hq_id))
+            amount_expr = "SUM(f.share_admin_region)"
+        elif user.role == "admin_region":
+            if not user.admin_region_id:
+                raise HTTPException(status_code=400, detail="Admin region id missing")
+            filter_clause = "WHERE c.admin_region_id = %s"
+            filter_params.append(str(user.admin_region_id))
+        elif user.role == "super_admin" and admin_region_id:
+            filter_clause = "WHERE c.admin_region_id = %s"
+            filter_params.append(str(admin_region_id))
+
+        try:
+            with get_db_connection(jwt_claims) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        WITH period AS (
+                            SELECT date_trunc('month', %s::date)::date AS month
+                        )
+                          SELECT
+                              s.id AS shop_id,
+                              s.name AS shop_name,
+                              s.hq_id AS hq_id,
+                              h.name AS hq_name,
+                              c.id AS city_id,
+                              c.parent_city_id AS parent_city_id,
+                              c.name AS city_name,
+                            COUNT(d.id) AS total_deliveries,
+                            COALESCE(SUM(l.bags), 0) AS total_bags,
+                            COALESCE({amount_expr}, 0) AS total_amount,
+                            bp.id IS NOT NULL AS is_frozen,
+                            bp.frozen_at,
+                            bp.frozen_by,
+                            COALESCE(bp.frozen_by_name, u.email) AS frozen_by_email,
+                            bp.pdf_url,
+                            bp.pdf_sha256
+                        FROM shop s
+                        JOIN city c ON c.id = s.city_id
+                        LEFT JOIN hq h ON h.id = s.hq_id
+                        LEFT JOIN delivery d
+                          ON d.shop_id = s.id
+                         AND date_trunc('month', d.delivery_date) = (SELECT month FROM period)
+                        LEFT JOIN delivery_logistics l ON l.delivery_id = d.id
+                        LEFT JOIN delivery_financial f ON f.delivery_id = d.id
+                        LEFT JOIN billing_period bp
+                          ON bp.shop_id = s.id
+                         AND bp.period_month = (SELECT month FROM period)
+                        LEFT JOIN auth.users u ON u.id = bp.frozen_by
+                        {filter_clause}
+                        GROUP BY
+                            s.id,
+                            s.name,
+                            s.hq_id,
+                            h.name,
+                            c.id,
+                            c.parent_city_id,
+                            c.name,
+                            bp.id,
+                            bp.frozen_at,
+                            bp.frozen_by,
+                            bp.frozen_by_name,
+                            u.email,
+                            bp.pdf_url,
+                            bp.pdf_sha256
+                        ORDER BY c.name, s.name
+                        """,
+                        (month_date, *filter_params),
+                    )
+                    rows = _rows_to_dicts(cur)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"HQ billing query failed: {exc}",
+            ) from exc
+
+        for row in rows:
+            frozen_by_id = row.pop("frozen_by", None)
+            frozen_by_email = row.pop("frozen_by_email", None)
+            row["frozen_by"] = (
+                {"id": frozen_by_id, "email": frozen_by_email}
+                if row.get("is_frozen")
+                else None
+            )
+
+        return jsonable_encoder({"month": month, "rows": rows})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"HQ billing failed: {exc}",
+        ) from exc
+
+
+@router.get("/hq-billing-deliveries")
+def get_hq_billing_deliveries(
+    user: MeResponse = Depends(require_hq_or_admin_user),
+    jwt_claims: str = Depends(get_current_user_claims),
+    month: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    admin_region_id: str | None = Query(default=None),
+):
+    """
+    Returns detailed deliveries for HQ/admin billing.
+    """
+    month_date = _parse_month(month)
+
+    filter_clause = ""
+    filter_params: list[str] = []
+    if user.role == "hq":
+        if not user.hq_id:
+            raise HTTPException(status_code=400, detail="HQ id missing")
+        filter_clause = "AND s.hq_id = %s"
+        filter_params.append(str(user.hq_id))
+    elif user.role == "admin_region":
+        if not user.admin_region_id:
+            raise HTTPException(status_code=400, detail="Admin region id missing")
+        filter_clause = "AND c.admin_region_id = %s"
+        filter_params.append(str(user.admin_region_id))
+    elif user.role == "super_admin" and admin_region_id:
+        filter_clause = "AND c.admin_region_id = %s"
+        filter_params.append(str(admin_region_id))
+
+    with get_db_connection(jwt_claims) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                  SELECT
+                      d.id AS delivery_id,
+                      d.delivery_date,
+                      s.id AS shop_id,
+                      s.name AS shop_name,
+                      c.id AS city_id,
+                      c.name AS city_name,
+                      p.id AS parent_city_id,
+                      p.name AS parent_city_name,
+                    l.client_name,
+                    l.address,
+                    l.postal_code,
+                    l.city_name AS delivery_city,
+                    l.bags,
+                    l.time_window,
+                    f.total_price,
+                    f.share_city,
+                    f.share_admin_region,
+                    f.share_client
+                FROM delivery d
+                JOIN shop s ON s.id = d.shop_id
+                  JOIN city c ON c.id = s.city_id
+                  LEFT JOIN city p ON p.id = c.parent_city_id
+                JOIN delivery_logistics l ON l.delivery_id = d.id
+                LEFT JOIN delivery_financial f ON f.delivery_id = d.id
+                WHERE date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                {filter_clause}
+                ORDER BY s.name, d.delivery_date
+                """,
+                (month_date, *filter_params),
+            )
+            return _rows_to_dicts(cur)
 
 
 @router.get("/hq-billing-shops")
@@ -155,10 +974,36 @@ def get_hq_billing_shops(
             month_date = _parse_month(month)
             cur.execute(
                 """
-                SELECT * FROM view_hq_billing_shops
-                WHERE date_trunc('month', billing_month) = date_trunc('month', %s::date)
+                SELECT
+                    h.name AS hq_name,
+                    s.id AS shop_id,
+                    s.name AS shop_name,
+                    c.name AS city_name,
+                    date_trunc('month', d.delivery_date)::date AS billing_month,
+                    COUNT(d.id) AS total_deliveries,
+                    SUM(f.share_admin_region) AS total_subvention_due,
+                    SUM(f.total_price) AS total_volume_chf,
+                    (bp.id IS NOT NULL) AS is_frozen
+                FROM delivery d
+                JOIN shop s ON s.id = d.shop_id
+                JOIN city c ON c.id = s.city_id
+                LEFT JOIN hq h ON h.id = s.hq_id
+                JOIN delivery_financial f ON f.delivery_id = d.id
+                LEFT JOIN billing_period bp
+                  ON bp.shop_id = s.id
+                 AND bp.period_month = date_trunc('month', d.delivery_date)::date
+                WHERE s.hq_id = %s
+                  AND date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                GROUP BY
+                    h.name,
+                    s.id,
+                    s.name,
+                    c.name,
+                    date_trunc('month', d.delivery_date)::date,
+                    bp.id
+                ORDER BY c.name, s.name
                 """,
-                (month_date,),
+                (str(user.hq_id), month_date),
             )
             return _rows_to_dicts(cur)
 
@@ -167,6 +1012,7 @@ def get_hq_billing_shops(
 def get_shop_monthly_pdf(
     shop_id: str,
     month: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    preview: bool = Query(default=False),
     user: MeResponse = Depends(get_current_user),
     jwt_claims: str = Depends(get_current_user_claims),
 ):
@@ -191,6 +1037,23 @@ def get_shop_monthly_pdf(
 
     with get_db_connection(jwt_claims) as conn:
         with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT s.name, c.name, h.name
+                FROM shop s
+                JOIN city c ON c.id = s.city_id
+                LEFT JOIN hq h ON h.id = s.hq_id
+                WHERE s.id = %s
+                """,
+                (shop_id,),
+            )
+            shop_row = cur.fetchone()
+            if not shop_row:
+                raise HTTPException(status_code=404, detail="Shop not found")
+
+            shop_name, shop_city, hq_name = shop_row
+            is_independent = hq_name is None or "indep" in (hq_name or "").lower()
+
             # 2. Check Exists & Frozen
             cur.execute(
                 """
@@ -207,19 +1070,162 @@ def get_shop_monthly_pdf(
                 (shop_id, period_month),
             )
             frozen = cur.fetchone()
-            
-            # 3. Serve stored PDF if available (WORM)
+
+            # 3. Preview mode (no freeze required)
+            if preview:
+                cur.execute(
+                    """
+                    SELECT
+                        d.delivery_date,
+                        l.client_name,
+                        l.city_name,
+                        l.bags,
+                        f.total_price,
+                        f.share_admin_region,
+                        f.share_city
+                    FROM delivery d
+                    JOIN delivery_logistics l ON l.delivery_id = d.id
+                    JOIN delivery_financial f ON f.delivery_id = d.id
+                    WHERE d.shop_id = %s
+                        AND d.delivery_date >= %s::date
+                        AND d.delivery_date < (%s::date + INTERVAL '1 month')
+                    ORDER BY d.delivery_date
+                    """,
+                    (shop_id, period_month, period_month),
+                )
+                deliveries = cur.fetchall()
+                if not deliveries:
+                    raise HTTPException(status_code=404, detail="No deliveries for this period")
+
+                vat_rate = _get_vat_rate(cur, period_month)
+                if is_independent:
+                    invoice_rows = [
+                        (
+                            delivery_date,
+                            shop_name,
+                            client_name,
+                            city_label,
+                            bags,
+                            share_admin_region,
+                        )
+                        for (
+                            delivery_date,
+                            client_name,
+                            city_label,
+                            bags,
+                            _total_price,
+                            share_admin_region,
+                            _share_city,
+                        ) in deliveries
+                    ]
+                    pdf_buffer = build_recipient_invoice_pdf(
+                        recipient_label="Commerce",
+                        recipient_name=shop_name,
+                        period_month=period_month,
+                        rows=invoice_rows,
+                        vat_rate=vat_rate,
+                        is_preview=True,
+                        payment_message=f"Facturation commerce DringDring {period_month.strftime('%Y-%m')}",
+                    )
+                    safe_shop = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in shop_name)
+                    filename = f"Facture_Commerce_{safe_shop}_{month}_PREVIEW.pdf"
+                else:
+                    pdf_buffer = build_shop_monthly_pdf(
+                        shop_name=shop_name,
+                        shop_city=shop_city,
+                        hq_name=hq_name,
+                        period_month=period_month,
+                        frozen_at=None,
+                        frozen_by=None,
+                        frozen_by_name=None,
+                        deliveries=deliveries,
+                        is_preview=True,
+                    )
+                    safe_shop = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in shop_name)
+                    filename = f"DringDring_Shop_{safe_shop}_{month}_PREVIEW.pdf"
+                return StreamingResponse(
+                    pdf_buffer,
+                    media_type="application/pdf",
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{filename}"',
+                    },
+                )
+
+            if is_independent and frozen:
+                cur.execute(
+                    """
+                    SELECT
+                        d.delivery_date,
+                        l.client_name,
+                        l.city_name,
+                        l.bags,
+                        f.total_price,
+                        f.share_admin_region,
+                        f.share_city
+                    FROM delivery d
+                    JOIN delivery_logistics l ON l.delivery_id = d.id
+                    JOIN delivery_financial f ON f.delivery_id = d.id
+                    WHERE d.shop_id = %s
+                        AND d.delivery_date >= %s::date
+                        AND d.delivery_date < (%s::date + INTERVAL '1 month')
+                    ORDER BY d.delivery_date
+                    """,
+                    (shop_id, period_month, period_month),
+                )
+                deliveries = cur.fetchall()
+                if not deliveries:
+                    raise HTTPException(status_code=404, detail="No deliveries for this period")
+                vat_rate = _get_vat_rate(cur, period_month)
+                invoice_rows = [
+                    (
+                        delivery_date,
+                        shop_name,
+                        client_name,
+                        city_label,
+                        bags,
+                        share_admin_region,
+                    )
+                    for (
+                        delivery_date,
+                        client_name,
+                        city_label,
+                        bags,
+                        _total_price,
+                        share_admin_region,
+                        _share_city,
+                    ) in deliveries
+                ]
+                pdf_buffer = build_recipient_invoice_pdf(
+                    recipient_label="Commerce",
+                    recipient_name=shop_name,
+                    period_month=period_month,
+                    rows=invoice_rows,
+                    vat_rate=vat_rate,
+                    is_preview=False,
+                    payment_message=f"Facturation commerce DringDring {period_month.strftime('%Y-%m')}",
+                )
+                safe_shop = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in shop_name)
+                filename = f"Facture_Commerce_{safe_shop}_{month}.pdf"
+                return StreamingResponse(
+                    pdf_buffer,
+                    media_type="application/pdf",
+                    headers={
+                        "Content-Disposition": f'attachment; filename=\"{filename}\"',
+                    },
+                )
+
+            # 4. Serve stored PDF if available (WORM)
             if frozen and frozen[3]: # pdf_url exists
                 pdf_url = frozen[3]
-                # Split bucket/path if needed. 
+                # Split bucket/path if needed.
                 # The storage function expects 'path' inside 'billing-pdf' bucket if we hardcode bucket?
-                # Actually upload_pdf_bytes used bucket="billing-pdf". 
+                # Actually upload_pdf_bytes used bucket="billing-pdf".
                 # pdf_url stored was just the path "shop/{id}/{month}.pdf".
                 try:
                     pdf_bytes = download_pdf_bytes(bucket="billing-pdf", path=pdf_url)
-                    
+
                     filename = f"DringDring_Shop_{shop_id}_{month}_FROZEN.pdf" # Fallback name
-                    # We could try to fetch shop name for better filename, 
+                    # We could try to fetch shop name for better filename,
                     # but for performance/simplicity ID is fine or we do one more query.
                     # Let's do one more query for nice filename if we want.
                     cur.execute("SELECT name FROM shop WHERE id = %s", (shop_id,))
@@ -236,96 +1242,19 @@ def get_shop_monthly_pdf(
                         },
                     )
                 except Exception as e:
-                    # Fallback or Error? 
+                    # Fallback or Error?
                     # If it's frozen but file missing, that's critical data loss -> 500
                     print(f"Error downloading WORM PDF: {e}")
                     raise HTTPException(status_code=500, detail="Stored PDF not found")
 
-            # 4. If not frozen, do we allow dynamic generation?
-            # Previous logic allowed generation ONLY if frozen (it raised 409 otherwise).
-            # The requirement is "PDF mensuel officiel WORM". 
-            # If not frozen, there is no official PDF.
-            if not frozen:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Billing period not frozen",
-                )
-            
-            # If frozen record exists but no PDF url (legacy?), we might fallback to generation?
-            # But we just implemented WORM. So let's stick to the generation logic as fallback 
-            # ONLY if pdf_url is missing but record exists (unlikely with new code).
-            
-            frozen_at, frozen_by, frozen_by_name, _ = frozen
-            
-            # ... (Existing generation logic below if we wanted to failover, 
-            # but for WORM we should probably fail if file is missing. 
-            # However, I will keep the generation code as fallback for robustness 
-            # if we have old frozen records without PDF? 
-            # The Prompt implies we ARE implementing WORM now, so previous ones might not have it.
-            # Let's keep the generation logic as "if no pdf_url found".)
+            # 5. Enforce WORM if not preview
+            if frozen and not frozen[3]:
+                raise HTTPException(status_code=500, detail="WORM Violation: Period frozen but PDF missing from storage record.")
 
-            cur.execute(
-                """
-                SELECT s.name, c.name, h.name
-                FROM shop s
-                JOIN city c ON c.id = s.city_id
-                LEFT JOIN hq h ON h.id = s.hq_id
-                WHERE s.id = %s
-                """,
-                (shop_id,),
+            raise HTTPException(
+                status_code=409,
+                detail="Billing period not frozen (No Official PDF)",
             )
-            shop_row = cur.fetchone()
-            if not shop_row:
-                raise HTTPException(status_code=404, detail="Shop not found")
-            shop_name, shop_city, hq_name = shop_row
-
-            cur.execute(
-                """
-                SELECT
-                    d.delivery_date,
-                    l.client_name,
-                    l.city_name,
-                    l.bags,
-                    f.total_price,
-                    f.share_shop,
-                    f.share_city
-                FROM delivery d
-                JOIN delivery_logistics l ON l.delivery_id = d.id
-                JOIN delivery_financial f ON f.delivery_id = d.id
-                WHERE d.shop_id = %s
-                  AND date_trunc('month', d.delivery_date) = %s::date
-                ORDER BY d.delivery_date
-                """,
-                (shop_id, period_month),
-            )
-            deliveries = cur.fetchall()
-
-    if not deliveries:
-        # If frozen but no deliveries found (weird?), fail
-        raise HTTPException(status_code=404, detail="No deliveries for this period (in DB)")
-
-    # Re-generate (Not WORM, but fallback)
-    pdf_buffer = build_shop_monthly_pdf(
-        shop_name=shop_name,
-        shop_city=shop_city,
-        hq_name=hq_name,
-        period_month=period_month,
-        frozen_at=frozen_at,
-        frozen_by=frozen_by,
-        frozen_by_name=frozen_by_name,
-        deliveries=deliveries,
-    )
-
-    safe_shop = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in shop_name)
-    filename = f"DringDring_Shop_{safe_shop}_{month}_FROZEN_REGEN.pdf"
-
-    return StreamingResponse(
-        pdf_buffer,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-        },
-    )
 
 
 @router.get("/hq-monthly-pdf")
@@ -333,49 +1262,133 @@ def get_hq_monthly_pdf(
     month: str = Query(pattern=r"^\d{4}-\d{2}$"),
     user: MeResponse = Depends(require_hq_or_admin_user),
     jwt_claims: str = Depends(get_current_user_claims),
+    hq_id: str | None = Query(default=None),
+    allow_unfrozen: bool = Query(default=False),
 ):
     period_month = _parse_month(month)
 
+    filter_clause = ""
+    filter_params: list[str] = []
+    if user.role == "hq":
+        if not user.hq_id:
+            raise HTTPException(status_code=400, detail="HQ id missing")
+        filter_clause = "AND s.hq_id = %s"
+        filter_params.append(str(user.hq_id))
+    elif user.role == "admin_region":
+        if not user.admin_region_id:
+            raise HTTPException(status_code=400, detail="Admin region id missing")
+        if not hq_id:
+            raise HTTPException(status_code=400, detail="HQ id required")
+        filter_clause = "AND s.hq_id = %s AND c.admin_region_id = %s"
+        filter_params.append(str(hq_id))
+        filter_params.append(str(user.admin_region_id))
+    elif user.role == "super_admin":
+        if not hq_id:
+            raise HTTPException(status_code=400, detail="HQ id required")
+        filter_clause = "AND s.hq_id = %s"
+        filter_params.append(str(hq_id))
+
+    vat_rate = Decimal("0.081")
+    delivery_rows: list[tuple] = []
     with get_db_connection(jwt_claims) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT
-                    hq_name,
-                    shop_id,
-                    shop_name,
-                    city_name,
-                    total_deliveries,
-                    total_subvention_due,
-                    total_volume_chf,
-                    is_frozen
-                FROM view_hq_billing_shops
-                WHERE date_trunc('month', billing_month) = date_trunc('month', %s::date)
-                ORDER BY shop_name
+                    h.name AS hq_name,
+                    s.id AS shop_id,
+                    s.name AS shop_name,
+                    c.name AS city_name,
+                    COUNT(d.id) AS total_deliveries,
+                    COALESCE(SUM(f.share_admin_region), 0) AS total_hq_due,
+                    BOOL_OR(bp.id IS NOT NULL) AS is_frozen
+                FROM delivery d
+                JOIN shop s ON s.id = d.shop_id
+                JOIN city c ON c.id = s.city_id
+                LEFT JOIN hq h ON h.id = s.hq_id
+                JOIN delivery_financial f ON f.delivery_id = d.id
+                LEFT JOIN billing_period bp
+                  ON bp.shop_id = s.id
+                 AND bp.period_month = date_trunc('month', d.delivery_date)::date
+                WHERE date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                {filter_clause}
+                GROUP BY h.name, s.id, s.name, c.name
+                ORDER BY s.name
                 """,
-                (period_month,),
+                (period_month, *filter_params),
             )
             rows = cur.fetchall()
+            vat_rate = _get_vat_rate(cur, period_month)
+
+            cur.execute(
+                f"""
+                SELECT
+                    d.delivery_date,
+                    s.name AS shop_name,
+                    l.client_name,
+                    c.name AS city_name,
+                    l.bags,
+                    f.share_admin_region
+                FROM delivery d
+                JOIN shop s ON s.id = d.shop_id
+                JOIN city c ON c.id = s.city_id
+                LEFT JOIN hq h ON h.id = s.hq_id
+                JOIN delivery_logistics l ON l.delivery_id = d.id
+                JOIN delivery_financial f ON f.delivery_id = d.id
+                WHERE date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                {filter_clause}
+                ORDER BY s.name, d.delivery_date
+                """,
+                (period_month, *filter_params),
+            )
+            delivery_rows = cur.fetchall()
 
     if not rows:
         raise HTTPException(status_code=404, detail="No data for this period")
 
-    if any(not row[7] for row in rows):
+    has_unfrozen = any(not row[6] for row in rows)
+    if has_unfrozen and not allow_unfrozen:
         raise HTTPException(
             status_code=409,
             detail="One or more shops are not frozen for this period",
         )
 
-    hq_name = rows[0][0] or "Groupe HQ"
+    if not delivery_rows:
+        raise HTTPException(status_code=404, detail="No deliveries for this period")
 
-    pdf_buffer = build_hq_monthly_pdf(
-        hq_name=hq_name,
+    hq_name = rows[0][0] or "Groupe HQ"
+    invoice_rows = [
+        (
+            delivery_date,
+            shop_name,
+            client_name,
+            city_name,
+            bags,
+            share_admin_region,
+        )
+        for (
+            delivery_date,
+            shop_name,
+            client_name,
+            city_name,
+            bags,
+            share_admin_region,
+        ) in delivery_rows
+    ]
+
+    pdf_buffer = build_recipient_invoice_pdf(
+        recipient_label="HQ",
+        recipient_name=hq_name,
         period_month=period_month,
-        rows=rows,
+        rows=invoice_rows,
+        vat_rate=vat_rate,
+        is_preview=has_unfrozen or allow_unfrozen,
+        payment_message=f"Facturation HQ DringDring {period_month.strftime('%Y-%m')}",
     )
 
     safe_hq = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in hq_name)
-    filename = f"DringDring_HQ_{safe_hq}_{month}_FROZEN.pdf"
+    suffix = "PROVISIONNEL" if (has_unfrozen or allow_unfrozen) else "FROZEN"
+    filename = f"Facture_HQ_{safe_hq}_{month}_{suffix}.pdf"
 
     return StreamingResponse(
         pdf_buffer,
@@ -390,6 +1403,7 @@ def get_hq_monthly_pdf(
 def get_city_monthly_pdf(
     city_id: str,
     month: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    preview: bool = Query(default=False),
     user=Depends(get_current_user),
     jwt_claims: str = Depends(get_current_user_claims),
 ):
@@ -412,9 +1426,11 @@ def get_city_monthly_pdf(
 
     period_month = _parse_month(month)
 
+    vat_rate = Decimal("0.081")
     with get_db_connection(jwt_claims) as conn:
         with conn.cursor() as cur:
-            _assert_city_period_fully_frozen(cur, city_id, period_month)
+            if not preview:
+                _assert_city_period_fully_frozen(cur, city_id, period_month)
 
             cur.execute(
                 """
@@ -440,7 +1456,7 @@ def get_city_monthly_pdf(
                     l.bags,
                     f.total_price,
                     f.share_city,
-                    f.share_shop
+                    f.share_admin_region
                 FROM delivery d
                 JOIN shop s ON s.id = d.shop_id
                 JOIN delivery_logistics l ON l.delivery_id = d.id
@@ -452,18 +1468,46 @@ def get_city_monthly_pdf(
                 (city_id, period_month),
             )
             rows = cur.fetchall()
+            vat_rate = _get_vat_rate(cur, period_month)
 
     if not rows:
         raise HTTPException(status_code=404, detail="No deliveries for this period")
 
-    pdf_buffer = build_city_monthly_pdf(
-        city_name=city_name,
+    invoice_rows = [
+        (
+            delivery_date,
+            shop_name,
+            client_name,
+            city_label,
+            bags,
+            share_city,
+        )
+        for (
+            _shop_id,
+            shop_name,
+            delivery_date,
+            client_name,
+            city_label,
+            bags,
+            _total_price,
+            share_city,
+            _share_admin_region,
+        ) in rows
+    ]
+
+    pdf_buffer = build_recipient_invoice_pdf(
+        recipient_label="Commune partenaire",
+        recipient_name=city_name,
         period_month=period_month,
-        rows=rows,
+        rows=invoice_rows,
+        vat_rate=vat_rate,
+        is_preview=preview,
+        payment_message=f"Facturation commune DringDring {period_month.strftime('%Y-%m')}",
     )
 
     safe_city = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in city_name)
-    filename = f"DringDring_City_{safe_city}_{month}_FROZEN.pdf"
+    suffix = "PROVISIONNEL" if preview else "FROZEN"
+    filename = f"Facture_Commune_{safe_city}_{month}_{suffix}.pdf"
 
     return StreamingResponse(
         pdf_buffer,
@@ -502,32 +1546,69 @@ def export_city_billing(
                 ],
                 column_labels={
                     "shop_name": "Commerce",
-                    "city_name": "Ville",
+                    "city_name": "Commune partenaire",
                     "billing_month": "Periode",
                     "total_deliveries": "Livraisons",
                     "total_subvention_due": "Subvention (CHF)",
                     "total_volume_chf": "Total CHF",
                 },
-                filename_base="facturation-ville",
+                filename_base="facturation-commune",
                 month_column="billing_month",
             )
 
 
 @router.get("/hq-billing/export")
 def export_hq_billing(
-    user: MeResponse = Depends(require_hq_user),
+    user: MeResponse = Depends(require_hq_or_admin_user),
     jwt_claims: str = Depends(get_current_user_claims),
     month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
+    admin_region_id: str | None = Query(default=None),
 ):
     with get_db_connection(jwt_claims) as conn:
         with conn.cursor() as cur:
             month_date = _parse_month(month)
+
+            filter_clause = ""
+            filter_params: list[str] = []
+            amount_expr = "SUM(f.share_city + f.share_admin_region)"
+
+            if user.role == "hq":
+                if not user.hq_id:
+                    raise HTTPException(status_code=400, detail="HQ id missing")
+                filter_clause = "AND s.hq_id = %s"
+                filter_params.append(str(user.hq_id))
+                amount_expr = "SUM(f.share_admin_region)"
+            elif user.role == "admin_region":
+                if not user.admin_region_id:
+                    raise HTTPException(status_code=400, detail="Admin region id missing")
+                filter_clause = "AND c.admin_region_id = %s"
+                filter_params.append(str(user.admin_region_id))
+            elif user.role == "super_admin" and admin_region_id:
+                filter_clause = "AND c.admin_region_id = %s"
+                filter_params.append(str(admin_region_id))
+
             cur.execute(
-                """
-                SELECT * FROM view_hq_billing_shops
-                WHERE date_trunc('month', billing_month) = date_trunc('month', %s::date)
+                f"""
+                SELECT
+                    s.name AS shop_name,
+                    c.name AS city_name,
+                    date_trunc('month', d.delivery_date)::date AS billing_month,
+                    COUNT(d.id) AS total_deliveries,
+                    COALESCE({amount_expr}, 0) AS total_subvention_due,
+                    COALESCE(SUM(f.total_price), 0) AS total_volume_chf
+                FROM delivery d
+                JOIN shop s ON s.id = d.shop_id
+                JOIN city c ON c.id = s.city_id
+                JOIN delivery_financial f ON f.delivery_id = d.id
+                WHERE date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                {filter_clause}
+                GROUP BY
+                    s.name,
+                    c.name,
+                    date_trunc('month', d.delivery_date)::date
+                ORDER BY c.name, s.name
                 """,
-                (month_date,),
+                (month_date, *filter_params),
             )
             return _export_csv(
                 cur,
@@ -541,15 +1622,37 @@ def export_hq_billing(
                 ],
                 column_labels={
                     "shop_name": "Commerce",
-                    "city_name": "Ville",
+                    "city_name": "Commune partenaire",
                     "billing_month": "Periode",
                     "total_deliveries": "Livraisons",
-                    "total_subvention_due": "Subvention (CHF)",
+                    "total_subvention_due": "Montant du (CHF)",
                     "total_volume_chf": "Total CHF",
                 },
                 filename_base="facturation-groupe",
                 month_column="billing_month",
             )
+
+
+def _get_vat_rate(cur, period_month: date) -> Decimal:
+    cur.execute("SELECT to_regclass('public.app_settings')")
+    table = cur.fetchone()
+    if not table or table[0] is None:
+        return Decimal("0.081")
+    cur.execute(
+        """
+        SELECT value_numeric
+        FROM public.app_settings
+        WHERE key = 'vat_rate'
+          AND effective_from <= %s
+        ORDER BY effective_from DESC
+        LIMIT 1
+        """,
+        (period_month,),
+    )
+    row = cur.fetchone()
+    if not row or row[0] is None:
+        return Decimal("0.081")
+    return Decimal(str(row[0]))
 
 
 def _rows_to_dicts(cur):

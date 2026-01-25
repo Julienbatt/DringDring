@@ -10,19 +10,23 @@ from app.routes import (
     clients,
     shops,
     billing,
+    regions,
+    couriers,
+    cities,
+    dispatch,
+    tariffs,
+    users,
+    stats,
+    settings as settings_router,
 )
+
+from app.core.config import settings as app_settings
 
 app = FastAPI(title="DringDring Backend")
 
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost",
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=app_settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -37,8 +41,16 @@ app.include_router(me.router, prefix="/api/v1")
 app.include_router(clients.router, prefix="/api/v1")
 app.include_router(shops.router, prefix="/api/v1")
 app.include_router(billing.router, prefix="/api/v1")
+app.include_router(regions.router, prefix="/api/v1")
+app.include_router(couriers.router, prefix="/api/v1")
+app.include_router(cities.router, prefix="/api/v1")
+app.include_router(dispatch.router, prefix="/api/v1")
+app.include_router(tariffs.router, prefix="/api/v1")
+app.include_router(users.router, prefix="/api/v1")
+app.include_router(stats.router, prefix="/api/v1")
+app.include_router(settings_router.router, prefix="/api/v1")
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

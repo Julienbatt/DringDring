@@ -49,12 +49,6 @@ def run_migration():
                     RETURN region_id::uuid;
                 END IF;
                 
-                -- Check user_metadata
-                region_id := claims -> 'user_metadata' ->> 'admin_region_id';
-                IF region_id IS NOT NULL THEN
-                    RETURN region_id::uuid;
-                END IF;
-                
                 RETURN NULL;
             EXCEPTION WHEN OTHERS THEN
                 RETURN NULL;

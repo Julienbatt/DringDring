@@ -1,0 +1,219 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Button } from '@/components/ui/button'
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch' // Need to check if Switch exists, else Checkbox
+import { Checkbox } from '@/components/ui/checkbox'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { apiPost, apiPut } from '@/lib/api'
+import { useAuth } from '../../../providers/AuthProvider'
+import { toast } from 'sonner'
+import { Bike } from 'lucide-react'
+
+export type CourierData = {
+    id?: string
+    first_name: string
+    last_name: string
+    courier_number: string
+    email?: string | null
+    phone_number?: string | null
+    vehicle_type?: string | null
+    active: boolean
+}
+
+type CourierDialogProps = {
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    courierToEdit?: CourierData | null
+    onSuccess: () => void
+}
+
+export function CourierDialog({ open, onOpenChange, courierToEdit, onSuccess }: CourierDialogProps) {
+    const { session, user, adminContextRegion } = useAuth()
+    const [loading, setLoading] = useState(false)
+
+    const [formData, setFormData] = useState<CourierData>({
+        first_name: '',
+        last_name: '',
+        courier_number: '',
+        email: '',
+        phone_number: '',
+        vehicle_type: 'bike',
+        active: true
+    })
+
+    useEffect(() => {
+        if (courierToEdit) {
+            setFormData({
+                ...courierToEdit,
+                email: courierToEdit.email || '',
+                phone_number: courierToEdit.phone_number || '',
+                vehicle_type: courierToEdit.vehicle_type || 'bike',
+            })
+        } else {
+            setFormData({
+                first_name: '',
+                last_name: '',
+                courier_number: '',
+                email: '',
+                phone_number: '',
+                vehicle_type: 'bike',
+                active: true
+            })
+        }
+    }, [courierToEdit, open])
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault()
+        if (!session?.access_token) return
+        if (user?.role === 'super_admin' && !adminContextRegion?.id) {
+            toast.error('Selectionnez une entreprise regionale')
+            return
+        }
+
+        setLoading(true)
+        try {
+            const payload = {
+                ...formData,
+                admin_region_id: user?.role === 'super_admin' ? adminContextRegion?.id : undefined,
+            }
+
+            if (courierToEdit?.id) {
+                await apiPut(`/couriers/${courierToEdit.id}`, payload, session.access_token)
+                toast.success("Coursier mis à jour")
+            } else {
+                await apiPost('/couriers', payload, session.access_token)
+                toast.success("Coursier créé")
+            }
+            onSuccess()
+            onOpenChange(false)
+        } catch (error: any) {
+            console.error(error)
+            toast.error(error.message || "Une erreur est survenue")
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    const isEditing = !!courierToEdit?.id
+
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent className="sm:max-w-[500px]">
+                <DialogHeader>
+                    <DialogTitle>{isEditing ? 'Modifier le Coursier' : 'Nouveau Coursier'}</DialogTitle>
+                    <DialogDescription>
+                        Gérez l'équipe logistique.
+                    </DialogDescription>
+                </DialogHeader>
+
+                <form onSubmit={handleSubmit} className="space-y-4 py-4">
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                            <Label htmlFor="firstname">Prénom *</Label>
+                            <Input
+                                id="firstname"
+                                value={formData.first_name}
+                                onChange={e => setFormData({ ...formData, first_name: e.target.value })}
+                                required
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="lastname">Nom *</Label>
+                            <Input
+                                id="lastname"
+                                value={formData.last_name}
+                                onChange={e => setFormData({ ...formData, last_name: e.target.value })}
+                                required
+                            />
+                        </div>
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label htmlFor="matricule">Matricule / Surnom *</Label>
+                        <Input
+                            id="matricule"
+                            value={formData.courier_number}
+                            onChange={e => setFormData({ ...formData, courier_number: e.target.value })}
+                            placeholder="Ex: C-101"
+                            required
+                        />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                            <Label htmlFor="email">Email</Label>
+                            <Input
+                                id="email"
+                                type="email"
+                                value={formData.email || ''}
+                                onChange={e => setFormData({ ...formData, email: e.target.value })}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="phone">Téléphone</Label>
+                            <Input
+                                id="phone"
+                                type="tel"
+                                value={formData.phone_number || ''}
+                                onChange={e => setFormData({ ...formData, phone_number: e.target.value })}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label htmlFor="vehicle">Véhicule Principal</Label>
+                        <Select
+                            value={formData.vehicle_type || 'bike'}
+                            onValueChange={v => setFormData({ ...formData, vehicle_type: v })}
+                        >
+                            <SelectTrigger>
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="bike">
+                                    <div className="flex items-center"><Bike className="w-4 h-4 mr-2" /> Vélo Classique</div>
+                                </SelectItem>
+                                <SelectItem value="cargo">
+                                    <div className="flex items-center"><Bike className="w-4 h-4 mr-2" /> Vélo Cargo</div>
+                                </SelectItem>
+                                <SelectItem value="electric">
+                                    <div className="flex items-center"><Bike className="w-4 h-4 mr-2 text-emerald-500" /> Vélo Électrique</div>
+                                </SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+
+                    <div className="flex items-center space-x-2 pt-2 bg-gray-50 p-3 rounded">
+                        <div className="flex items-center space-x-2 pt-2 bg-gray-50 p-3 rounded">
+                            <Switch
+                                id="active"
+                                checked={formData.active}
+                                onCheckedChange={(c) => setFormData({ ...formData, active: c })}
+                            />
+                            <Label htmlFor="active" className="cursor-pointer">Compte Actif (Peut recevoir des courses)</Label>
+                        </div>
+                    </div>
+
+                    <DialogFooter className="pt-4">
+                        <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Annuler</Button>
+                        <Button type="submit" disabled={loading}>
+                            {loading ? 'Enregistrement...' : (isEditing ? 'Mettre à jour' : 'Créer')}
+                        </Button>
+                    </DialogFooter>
+                </form>
+            </DialogContent>
+        </Dialog>
+    )
+}

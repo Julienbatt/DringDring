@@ -1,149 +1,162 @@
 import os
 import sys
-import base64
 import requests
 import json
-import uuid
 import datetime
 from jose import jwt
+import psycopg
 
 # Add backend directory to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from app.core.config import settings
-import psycopg
 
 API_URL = "http://localhost:8000/api/v1"
 
-def get_user_id(email):
-    # Use direct connection as in seed.py
+def get_profile(email):
     try:
-        conn = psycopg.connect(settings.DATABASE_URL, autocommit=True)
+        conn = psycopg.connect(settings.DATABASE_URL, autocommit=True, prepare_threshold=None)
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM auth.users WHERE email = %s", (email,))
+            cur.execute(
+                """
+                SELECT u.id, p.role, p.admin_region_id, p.city_id, p.hq_id, p.shop_id
+                FROM auth.users u
+                JOIN public.profiles p ON p.id = u.id
+                WHERE u.email = %s
+                """,
+                (email,),
+            )
             row = cur.fetchone()
-            return row[0] if row else None
+            if not row:
+                print(f"FAIL: Profile not found for {email}")
+                return None
+            return {
+                "user_id": str(row[0]),
+                "role": row[1],
+                "admin_region_id": str(row[2]) if row[2] else None,
+                "city_id": str(row[3]) if row[3] else None,
+                "hq_id": str(row[4]) if row[4] else None,
+                "shop_id": str(row[5]) if row[5] else None,
+                "email": email,
+            }
     except Exception as e:
-        print(f"DB Error: {e}")
+        print(f"FAIL: DB error for {email}: {e}")
         return None
 
-def forge_tokens(user_id, email):
-    secret = settings.SUPABASE_JWT_SECRET
-    
-    tokens = []
-    
-    # Payload
+def forge_token(profile):
+    app_metadata = {
+        "role": profile["role"],
+        "admin_region_id": profile["admin_region_id"],
+        "city_id": profile["city_id"],
+        "hq_id": profile["hq_id"],
+        "shop_id": profile["shop_id"],
+        "provider": "email",
+        "providers": ["email"],
+    }
+    app_metadata = {k: v for k, v in app_metadata.items() if v is not None}
+
     payload = {
-        "sub": str(user_id),
-        "email": email,
+        "sub": profile["user_id"],
+        "email": profile["email"],
         "role": "authenticated",
-        "app_metadata": {"provider": "email", "providers": ["email"]},
-        "user_metadata": {},
+        "app_metadata": app_metadata,
         "aud": "authenticated",
         "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1),
         "iat": datetime.datetime.utcnow(),
     }
 
-    # 1. RAW
-    try:
-        t = jwt.encode(payload, secret, algorithm="HS256")
-        tokens.append(("RAW", t))
-    except Exception as e:
-        print(f"Error signing RAW: {e}")
+    return jwt.encode(payload, settings.SUPABASE_JWT_SECRET, algorithm="HS256")
 
-    # 2. DECODED (Fix padding)
-    try:
-        padded_secret = secret + "=" * ((4 - len(secret) % 4) % 4)
-        dec_secret = base64.b64decode(padded_secret)
-        t = jwt.encode(payload, dec_secret, algorithm="HS256")
-        tokens.append(("DECODED", t))
-    except Exception as e:
-        print(f"Error signing DECODED: {e}")
-
-    return tokens
-
-def test_endpoint(name, method, path, tokens, expected_status=200, payload=None):
+def test_endpoint(name, method, path, token, expected_status=200, payload=None):
     url = f"{API_URL}{path}"
     
-    for token_type, token in tokens:
-        headers = {"Authorization": f"Bearer {token}"}
-        try:
-            if method == "GET":
-                response = requests.get(url, headers=headers)
-            elif method == "POST":
-                response = requests.post(url, headers=headers, json=payload)
-            
-            if response.status_code == expected_status:
-                print(f"✅ {name} ({token_type}): {method} {path} -> {response.status_code}")
-                return True, response.json() if response.content else None
-            # If 401, keep trying next token
-            if response.status_code != 401:
-                 # If it's not 401, it's a failure (e.g. 404, 500), so report it but return False
-                print(f"❌ {name} ({token_type}): {method} {path} -> {response.status_code} (Expected {expected_status})")
-        except Exception as e:
-            pass
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        if method == "GET":
+            response = requests.get(url, headers=headers)
+        elif method == "POST":
+            response = requests.post(url, headers=headers, json=payload)
+        else:
+            print(f"FAIL: Unsupported method {method}")
+            return False, None
 
-    print(f"❌ {name}: Failed with all token variations (last status: {response.status_code if 'response' in locals() else 'N/A'})")
-    if 'response' in locals():
-        print(f"   Response: {response.text}")
-    return False, None
+        if response.status_code == expected_status:
+            print(f"OK: {name}: {method} {path} -> {response.status_code}")
+            return True, response.json() if response.content else None
+
+        print(f"FAIL: {name}: {method} {path} -> {response.status_code} (Expected {expected_status})")
+        if response.text:
+            print(f"   Response: {response.text}")
+        return False, None
+    except Exception as e:
+        print(f"FAIL: {name} error: {e}")
+        return False, None
 
 def main():
-    print("🚀 Starting User Journey Verification...")
+    print("Starting user journey verification...")
+    month = datetime.date.today().strftime("%Y-%m")
     
     # 1. Courier
-    print("\n🚴 Verifying COURIER Journey...")
+    print("\nVerifying COURIER journey...")
     courier_email = "coursier@dringdring.ch"
-    courier_id = get_user_id(courier_email)
-    if not courier_id:
-        print("❌ Courier user not found in DB")
+    courier_profile = get_profile(courier_email)
+    if not courier_profile:
         return
-    courier_tokens = forge_tokens(courier_id, courier_email)
+    courier_token = forge_token(courier_profile)
     
-    success, deliveries = test_endpoint("Courier Deliveries", "GET", "/deliveries/courier", courier_tokens)
+    success, deliveries = test_endpoint("Courier Deliveries", "GET", "/deliveries/courier", courier_token)
     if success and deliveries:
         # Try to update status if any delivery exists
         if len(deliveries) > 0:
             delivery_id = deliveries[0]['delivery_id']
-            test_endpoint("Update Status Picked Up", "POST", f"/deliveries/{delivery_id}/status?status=picked_up", courier_tokens)
+            test_endpoint("Update Status Picked Up", "POST", f"/deliveries/{delivery_id}/status?status=picked_up", courier_token)
     
     # 2. Customer
-    print("\n👤 Verifying CUSTOMER Journey...")
+    print("\nVerifying CUSTOMER journey...")
     customer_email = "client@dringdring.ch"
-    customer_id = get_user_id(customer_email)
-    customer_tokens = forge_tokens(customer_id, customer_email)
-    test_endpoint("Customer Timeline", "GET", "/deliveries/customer", customer_tokens)
+    customer_profile = get_profile(customer_email)
+    if not customer_profile:
+        return
+    customer_token = forge_token(customer_profile)
+    test_endpoint("Customer Timeline", "GET", "/deliveries/customer", customer_token)
 
     # 3. Shop
-    print("\n🏪 Verifying SHOP Journey...")
+    print("\nVerifying SHOP journey...")
     shop_email = "shop_metropole@dringdring.ch"
-    shop_id = get_user_id(shop_email)
-    shop_tokens = forge_tokens(shop_id, shop_email)
-    test_endpoint("Shop History", "GET", "/deliveries/shop?month=2025-01", shop_tokens)
-    test_endpoint("Shop Config", "GET", "/deliveries/shop/configuration", shop_tokens)
+    shop_profile = get_profile(shop_email)
+    if not shop_profile:
+        return
+    shop_token = forge_token(shop_profile)
+    test_endpoint("Shop History", "GET", f"/deliveries/shop?month={month}", shop_token)
+    test_endpoint("Shop Config", "GET", "/deliveries/shop/configuration", shop_token)
 
     # 4. City
-    print("\n🏢 Verifying CITY Journey...")
+    print("\nVerifying CITY journey...")
     city_email = "sion@dringdring.ch"
-    city_id = get_user_id(city_email)
-    city_tokens = forge_tokens(city_id, city_email)
-    test_endpoint("City Billing", "GET", "/reports/city-billing?month=2025-01", city_tokens)
+    city_profile = get_profile(city_email)
+    if not city_profile:
+        return
+    city_token = forge_token(city_profile)
+    test_endpoint("City Billing", "GET", f"/reports/city-billing?month={month}", city_token)
 
     # 5. HQ
-    print("\n🏭 Verifying HQ Journey...")
+    print("\nVerifying HQ journey...")
     hq_email = "migros@dringdring.ch"
-    hq_id = get_user_id(hq_email)
-    hq_tokens = forge_tokens(hq_id, hq_email)
-    test_endpoint("HQ Billing", "GET", "/reports/hq-billing?month=2025-01", hq_tokens)
+    hq_profile = get_profile(hq_email)
+    if not hq_profile:
+        return
+    hq_token = forge_token(hq_profile)
+    test_endpoint("HQ Billing", "GET", f"/reports/hq-billing?month={month}", hq_token)
 
     # 6. Admin
-    print("\n🏛️ Verifying ADMIN Journey...")
+    print("\nVerifying ADMIN journey...")
     admin_email = "admin_vs@dringdring.ch"
-    admin_id = get_user_id(admin_email)
-    admin_tokens = forge_tokens(admin_id, admin_email)
-    # Admin routes are a bit different, checking shops list
-    test_endpoint("Admin Shops List", "GET", "/shops/admin", admin_tokens)
+    admin_profile = get_profile(admin_email)
+    if not admin_profile:
+        return
+    admin_token = forge_token(admin_profile)
+    test_endpoint("Admin Shops List", "GET", "/shops/admin", admin_token)
 
-    print("\n✨ Verification Complete.")
+    print("\nVerification complete.")
 
 if __name__ == "__main__":
     main()

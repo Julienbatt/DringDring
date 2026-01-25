@@ -109,20 +109,21 @@ def _generate_qr_code_with_cross(qr_data: str, size: float) -> Drawing:
         ReportLab Drawing with QR code and Swiss Cross
     """
     # Create QR code widget
-    qr_code = qr.QrCodeWidget(qr_data, barLevel="M")
+    qr_code = qr.QrCodeWidget(qr_data, barLevel="H")
     bounds = qr_code.getBounds()
     width = bounds[2] - bounds[0]
     height = bounds[3] - bounds[1]
     
     # Create drawing with proper scaling
-    drawing = Drawing(size, size, transform=[size / width, 0, 0, size / height, 0, 0])
+    scale = size / width
+    drawing = Drawing(size, size, transform=[scale, 0, 0, scale, 0, 0])
     drawing.add(qr_code)
     
-    # Add Swiss Cross overlay
-    cross_size = SWISS_CROSS_SIZE
+    # Add Swiss Cross overlay (work in unscaled QR units)
+    cross_size = SWISS_CROSS_SIZE / scale
     cross_scale = cross_size / 19  # Standard cross proportions
-    cross_origin_x = (size - cross_size) / 2
-    cross_origin_y = (size - cross_size) / 2
+    cross_origin_x = (width - cross_size) / 2
+    cross_origin_y = (height - cross_size) / 2
     
     # Black square background
     drawing.add(
@@ -256,14 +257,14 @@ def render_swiss_qr_bill(
     # Labels by language
     labels = {
         "fr": {
-            "receipt": "Récépissé",
+            "receipt": "Recepisse",
             "payment_part": "Section paiement",
-            "account": "Compte / Payable à",
-            "reference": "Référence",
+            "account": "Compte / Payable a",
+            "reference": "Reference",
             "payable_by": "Payable par",
             "currency": "Monnaie",
             "amount": "Montant",
-            "acceptance_point": "Point de dépôt",
+            "acceptance_point": "Point de depot",
         },
         "de": {
             "receipt": "Empfangsschein",
@@ -271,12 +272,12 @@ def render_swiss_qr_bill(
             "account": "Konto / Zahlbar an",
             "reference": "Referenz",
             "payable_by": "Zahlbar durch",
-            "currency": "Währung",
+            "currency": "Waehrung",
             "amount": "Betrag",
             "acceptance_point": "Annahmestelle",
         },
     }
-    
+
     lang = labels.get(language, labels["fr"])
     
     # Parse addresses if needed
@@ -298,9 +299,14 @@ def render_swiss_qr_bill(
         f"{_clean(creditor_postal_code)} {_clean(creditor_city)}",
     ]
     
-    # Build debtor address lines
+    # Build debtor address lines (only if we have meaningful address data)
+    has_debtor = bool(
+        debtor_name
+        and (debtor_street or debtor_postal_code or debtor_city)
+    )
     debtor_lines = []
-    if debtor_name:
+    debtor_address_combined = ""
+    if has_debtor:
         debtor_address_combined = debtor_street or ""
         if debtor_house_num:
             debtor_address_combined = f"{debtor_street} {debtor_house_num}"
@@ -425,10 +431,10 @@ def render_swiss_qr_bill(
             creditor_country=creditor_country,
             amount=amount,
             currency=currency,
-            debtor_name=debtor_name,
-            debtor_address=debtor_street or "",
-            debtor_postal_code=debtor_postal_code,
-            debtor_city=debtor_city,
+            debtor_name=debtor_name if has_debtor else None,
+            debtor_address=debtor_address_combined,
+            debtor_postal_code=debtor_postal_code if has_debtor else None,
+            debtor_city=debtor_city if has_debtor else None,
             debtor_country=debtor_country,
             reference=reference,
             message=message,

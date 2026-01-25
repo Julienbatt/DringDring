@@ -1,26 +1,40 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
+import csv
 import hashlib
+import io
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 
-from app.core.guards import require_hq_or_admin_user_for_shop, require_shop_user, require_courier_user, require_customer_user
+from app.core.guards import (
+    require_hq_or_admin_user_for_shop,
+    require_shop_user,
+    require_courier_user,
+    require_customer_user,
+    require_admin_user,
+)
+from app.core.config import settings
+from app.core.geo import compute_co2_saved_kg, compute_distance_km, geocode_swiss_address
 from app.core.security import get_current_user_claims
 from app.core.tariff_engine import compute_financials, parse_rule
 from app.core.tariff_validation import validate_tariff_rule
 from app.db.session import get_db_connection
 from app.pdf.shop_monthly_report import build_shop_monthly_pdf
-from app.schemas.delivery import DeliveryCreate, ShopDeliveryCreate
+from app.schemas.delivery import DeliveryCreate, ShopDeliveryCreate, ShopDeliveryUpdate, ShopDeliveryCancel
 from app.schemas.me import MeResponse
 from app.storage.supabase_storage import upload_pdf_bytes
 
 router = APIRouter(prefix="/deliveries", tags=["deliveries"])
 
+EDITABLE_STATUSES = {"created", "assigned"}
+
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_delivery(
     payload: DeliveryCreate,
+    user: MeResponse = Depends(require_admin_user),
     jwt_claims: str = Depends(get_current_user_claims),
 ):
     delivery_id = uuid4()
@@ -32,17 +46,133 @@ def create_delivery(
                     _assert_period_not_frozen(
                         cur, str(payload.shop_id), payload.delivery_date
                     )
+
+                    # FETCH TERRITORY from Shop ID (Security / Integrity)
+                    cur.execute(
+                        """
+                        SELECT s.hq_id, s.city_id, s.tariff_version_id, c.canton_id, c.admin_region_id,
+                               s.lat, s.lng, s.address
+                        FROM shop s
+                        JOIN city c ON c.id = s.city_id
+                        WHERE s.id = %s
+                        """,
+                        (str(payload.shop_id),)
+                    )
+                    shop_row = cur.fetchone()
+                    if not shop_row:
+                        raise HTTPException(status_code=404, detail="Shop not found")
+
+                    hq_id, shop_city_id, tariff_version_id, canton_id, admin_region_id_from_city, shop_lat, shop_lng, shop_address = shop_row
+
+                    # Fallback or strict lookup for admin_region if not stored in city?
+                    # The vision says city belongs to admin_region.
+                    # Let's assume the query above returns it (requires city schema check, but safer to query)
+                    
+                    # If city table doesn't have admin_region_id directly, we need to join or look up.
+                    # Let's double check via a more robust query finding active region for canton if needed,
+                    # BUT ideally city->admin_region is 1:1.
+                    # As a safe bet conforming to `create_delivery_for_shop` logic:
+                    
+                    cur.execute(
+                        """
+                        SELECT id FROM admin_region
+                        WHERE canton_id = %s AND active = true
+                        LIMIT 1
+                        """,
+                        (canton_id,)
+                    )
+                    ar_row = cur.fetchone()
+                    if not ar_row:
+                         # Fallback to city's if exists, or error
+                         if not admin_region_id_from_city:
+                             raise HTTPException(status_code=400, detail="No active Admin Region found for this shop's canton")
+                         admin_region_id = admin_region_id_from_city
+                    else:
+                         admin_region_id = ar_row[0]
+
+
+                    if str(payload.hq_id) != str(hq_id):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="HQ mismatch for shop",
+                        )
+                    if str(payload.canton_id) != str(canton_id):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Canton mismatch for shop",
+                        )
+                    if str(payload.admin_region_id) != str(admin_region_id):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Admin region mismatch for shop",
+                        )
+
+                    resolved_city_id = str(payload.city_id)
+                    postal_lookup = _resolve_city_by_postal_code(cur, payload.postal_code)
+                    if postal_lookup:
+                        lookup_city_id, lookup_parent_id, lookup_admin_region_id = postal_lookup
+                        if lookup_admin_region_id and str(lookup_admin_region_id) != str(admin_region_id):
+                            raise HTTPException(
+                                status_code=400,
+                                detail="Postal code not in admin region",
+                            )
+                        if str(lookup_city_id) != str(shop_city_id) and str(lookup_parent_id) != str(shop_city_id):
+                            raise HTTPException(
+                                status_code=400,
+                                detail="Postal code not in shop commune",
+                            )
+                        resolved_city_id = str(lookup_city_id)
+                    else:
+                        payload_parent_id = _get_city_parent_id(cur, str(payload.city_id))
+                        if str(payload.city_id) != str(shop_city_id) and str(payload_parent_id) != str(shop_city_id):
+                            raise HTTPException(
+                                status_code=400,
+                                detail="City mismatch for shop",
+                            )
+
+                    conn.commit()
+
+                    if (shop_lat is None or shop_lng is None) and shop_address:
+                        geocoded = geocode_swiss_address(shop_address)
+                        if geocoded:
+                            shop_lat, shop_lng = geocoded
+                            cur.execute(
+                                "UPDATE shop SET lat = %s, lng = %s WHERE id = %s",
+                                (shop_lat, shop_lng, str(payload.shop_id)),
+                            )
+
+                    distance_km = None
+                    co2_saved_kg = None
+                    if shop_lat is not None and shop_lng is not None:
+                        query = f"{payload.address}, {payload.postal_code} {payload.city_name}".strip(", ")
+                        geocoded = geocode_swiss_address(query) if query else None
+                        if geocoded:
+                            client_lat, client_lng = geocoded
+                            distance_km = compute_distance_km(
+                                shop_lat, shop_lng, client_lat, client_lng
+                            )
+                            distance_km *= settings.RETURN_TRIP_MULTIPLIER
+                            co2_saved_kg = compute_co2_saved_kg(distance_km)
+
                     _insert_delivery_record(
                         cur,
                         delivery_id=delivery_id,
                         shop_id=str(payload.shop_id),
-                        hq_id=str(payload.hq_id),
-                        admin_region_id=str(payload.admin_region_id),
-                        city_id=str(payload.city_id),
-                        canton_id=str(payload.canton_id),
+                        hq_id=str(hq_id), # Governance: Trust shop hierarchy
+                        admin_region_id=str(admin_region_id),
+                        city_id=resolved_city_id,
+                        canton_id=str(canton_id),
                         delivery_date=payload.delivery_date,
                         client_id=None,
+                        distance_km=distance_km,
+                        co2_saved_kg=co2_saved_kg,
                     )
+
+                    import random
+                    import string
+                    
+                    chars = string.ascii_uppercase + string.digits
+                    short_code = ''.join(random.choice(chars) for _ in range(3))
 
                     _insert_delivery_logistics(
                         cur,
@@ -55,9 +185,57 @@ def create_delivery(
                         bags=payload.bags,
                         order_amount=payload.order_amount,
                         is_cms=payload.is_cms,
+                        notes=None,
+                        short_code=short_code,
                     )
 
                     _insert_delivery_status(cur, delivery_id=delivery_id)
+
+                    # Financials (Vision: "Création d'un snapshot financier")
+                    # 1. Fetch Tariff from Shop (if any)
+                    cur.execute("SELECT tariff_version_id FROM shop WHERE id = %s", (str(payload.shop_id),))
+                    shop_row = cur.fetchone()
+                    tariff_version_id = shop_row[0] if shop_row else None
+
+                    if not tariff_version_id:
+                        # Governance requirement: "Tarification pilier" -> Strict enforcement
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Tariff version not configured for shop (Governance/Critical)"
+                        )
+
+                    # 2. Fetch Rule
+                    cur.execute(
+                        "SELECT rule_type, rule, share FROM tariff_version WHERE id = %s",
+                        (tariff_version_id,)
+                    )
+                    tv_row = cur.fetchone()
+                    if tv_row:
+                        r_type, r_val, s_val = tv_row
+                        # 3. Compute
+                        total, s_cli, s_shop, s_city, s_admin = compute_financials(
+                            rule_type=r_type,
+                            rule=parse_rule(r_val),
+                            share=parse_rule(s_val),
+                            bags=payload.bags,
+                            order_amount=payload.order_amount,
+                            is_cms=payload.is_cms
+                        )
+                        # Business rule: no separate shop share; fold into admin_region share.
+                        if s_shop:
+                            s_admin = s_admin + s_shop
+                            s_shop = 0
+                        # 4. Insert Snapshot
+                        _insert_delivery_financial(
+                            cur,
+                            delivery_id=delivery_id,
+                            tariff_version_id=tariff_version_id,
+                            total_price=total,
+                            client_share=s_cli,
+                            shop_share=s_shop,
+                            city_share=s_city,
+                            admin_share=s_admin
+                        )
 
     except Exception as e:
         print(f"SQL Error: {e}")
@@ -78,121 +256,162 @@ def create_delivery_for_shop(
     if not shop_id:
         raise HTTPException(status_code=400, detail="Shop id missing")
 
-    with get_db_connection(jwt_claims) as conn:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT s.hq_id, s.city_id, s.tariff_version_id, c.canton_id
-                    FROM shop s
-                    JOIN city c ON c.id = s.city_id
-                    WHERE s.id = %s
-                    """,
-                    (shop_id,),
-                )
-                row = cur.fetchone()
-
-                if not row:
-                    raise HTTPException(status_code=404, detail="Shop not found")
-
-                hq_id, city_id, tariff_version_id, canton_id = row
-                if not tariff_version_id:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Tariff version not configured for shop",
+    try:
+        with get_db_connection(jwt_claims) as conn:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT s.hq_id, s.city_id, s.tariff_version_id, c.canton_id,
+                               s.lat, s.lng, s.address
+                        FROM shop s
+                        JOIN city c ON c.id = s.city_id
+                        WHERE s.id = %s
+                        """,
+                        (shop_id,),
                     )
+                    row = cur.fetchone()
 
-                cur.execute(
-                    """
-                    SELECT id, name, address, postal_code, city_name, is_cms, city_id
-                    FROM client
-                    WHERE id = %s
-                    """,
-                    (str(payload.client_id),),
-                )
-                client_row = cur.fetchone()
-                if not client_row:
-                    raise HTTPException(status_code=404, detail="Client not found")
+                    if not row:
+                        raise HTTPException(status_code=404, detail="Shop not found")
 
-                (
-                    client_id,
-                    client_name,
-                    client_address,
-                    client_postal_code,
-                    client_city_name,
-                    client_is_cms,
-                    client_city_id,
-                ) = client_row
+                    hq_id, city_id, tariff_version_id, canton_id, shop_lat, shop_lng, shop_address = row
+                    if not tariff_version_id:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Tariff version not configured for shop",
+                        )
 
-                if str(client_city_id) != str(city_id):
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Client not in shop city",
+                    cur.execute(
+                        """
+                        SELECT cl.id, cl.name, cl.address, cl.postal_code, cl.city_name,
+                               cl.is_cms, cl.city_id, cl.lat, cl.lng, c.parent_city_id
+                        FROM client cl
+                        JOIN city c ON c.id = cl.city_id
+                        WHERE cl.id = %s
+                        """,
+                        (str(payload.client_id),),
                     )
+                    client_row = cur.fetchone()
+                    if not client_row:
+                        raise HTTPException(status_code=404, detail="Client not found")
 
-                cur.execute(
-                    """
-                    SELECT id
-                    FROM admin_region
-                    WHERE canton_id = %s AND active = true
-                    ORDER BY name
-                    LIMIT 1
-                    """,
-                    (canton_id,),
-                )
-                admin_region_row = cur.fetchone()
-                if not admin_region_row:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Admin region not configured for canton",
+                    (
+                        client_id,
+                        client_name,
+                        client_address,
+                        client_postal_code,
+                        client_city_name,
+                        client_is_cms,
+                        client_city_id,
+                        client_lat,
+                        client_lng,
+                        client_parent_city_id,
+                    ) = client_row
+
+                    if str(client_city_id) != str(city_id) and str(client_parent_city_id) != str(city_id):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Client not in shop city",
+                        )
+
+                    cur.execute(
+                        """
+                        SELECT id
+                        FROM admin_region
+                        WHERE canton_id = %s AND active = true
+                        ORDER BY name
+                        LIMIT 1
+                        """,
+                        (canton_id,),
                     )
-                admin_region_id = admin_region_row[0]
+                    admin_region_row = cur.fetchone()
+                    if not admin_region_row:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Admin region not configured for canton",
+                        )
+                    admin_region_id = admin_region_row[0]
 
-                _assert_period_not_frozen(cur, str(shop_id), payload.delivery_date)
+                    _assert_period_not_frozen(cur, str(shop_id), payload.delivery_date)
 
-                cur.execute(
-                    """
-                    SELECT
-                        id,
-                        rule_type,
-                        rule,
-                        share
-                    FROM tariff_version
-                    WHERE id = %s
-                      AND valid_from <= %s
-                      AND (valid_to IS NULL OR valid_to >= %s)
-                    LIMIT 1
-                    """,
-                    (str(tariff_version_id), payload.delivery_date, payload.delivery_date),
-                )
-                tariff_version = cur.fetchone()
-                if not tariff_version:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="No active tariff version for this date",
+                    cur.execute(
+                        """
+                        SELECT
+                            id,
+                            rule_type,
+                            rule,
+                            share
+                        FROM tariff_version
+                        WHERE id = %s
+                          AND valid_from <= %s
+                          AND (valid_to IS NULL OR valid_to >= %s)
+                        LIMIT 1
+                        """,
+                        (str(tariff_version_id), payload.delivery_date, payload.delivery_date),
                     )
+                    tariff_version = cur.fetchone()
+                    if not tariff_version:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="No active tariff version for this date",
+                        )
 
-                client = {
-                    "id": str(client_id),
-                    "name": client_name,
-                    "address": client_address,
-                    "postal_code": client_postal_code,
-                    "city_name": client_city_name,
-                    "is_cms": client_is_cms,
-                }
+                    conn.commit()
 
-                _create_delivery_core(
-                    cur=cur,
-                    delivery_id=delivery_id,
-                    shop_id=str(shop_id),
-                    hq_id=str(hq_id),
-                    admin_region_id=str(admin_region_id),
-                    city_id=str(city_id),
-                    canton_id=str(canton_id),
-                    client=client,
-                    payload=payload,
-                    tariff_version=tariff_version,
-                )
+                    if (shop_lat is None or shop_lng is None) and shop_address:
+                        geocoded = geocode_swiss_address(shop_address)
+                        if geocoded:
+                            shop_lat, shop_lng = geocoded
+                            cur.execute(
+                                "UPDATE shop SET lat = %s, lng = %s WHERE id = %s",
+                                (shop_lat, shop_lng, str(shop_id)),
+                            )
+
+                    if (client_lat is None or client_lng is None) and client_address:
+                        query = f"{client_address}, {client_postal_code} {client_city_name}".strip(", ")
+                        geocoded = geocode_swiss_address(query) if query else None
+                        if geocoded:
+                            client_lat, client_lng = geocoded
+                            cur.execute(
+                                "UPDATE client SET lat = %s, lng = %s WHERE id = %s",
+                                (client_lat, client_lng, str(client_id)),
+                            )
+
+                    distance_km = None
+                    co2_saved_kg = None
+                    if shop_lat is not None and shop_lng is not None and client_lat is not None and client_lng is not None:
+                        distance_km = compute_distance_km(shop_lat, shop_lng, client_lat, client_lng)
+                        distance_km *= settings.RETURN_TRIP_MULTIPLIER
+                        co2_saved_kg = compute_co2_saved_kg(distance_km)
+
+                    client = {
+                        "id": str(client_id),
+                        "name": client_name,
+                        "address": client_address,
+                        "postal_code": client_postal_code,
+                        "city_name": client_city_name,
+                        "is_cms": client_is_cms,
+                    }
+
+                    _create_delivery_core(
+                        cur=cur,
+                        delivery_id=delivery_id,
+                        shop_id=str(shop_id),
+                        hq_id=str(hq_id),
+                        admin_region_id=str(admin_region_id),
+                        city_id=str(client_city_id),
+                        canton_id=str(canton_id),
+                        client=client,
+                        payload=payload,
+                        tariff_version=tariff_version,
+                        distance_km=distance_km,
+                        co2_saved_kg=co2_saved_kg,
+                    )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return {"delivery_id": str(delivery_id)}
 
@@ -266,7 +485,8 @@ def preview_delivery_for_shop(
                 raise HTTPException(status_code=404, detail="Client not found")
 
             client_is_cms, client_city_id = client_row
-            if str(client_city_id) != str(city_id):
+            parent_id = _get_city_parent_id(cur, str(client_city_id))
+            if str(client_city_id) != str(city_id) and str(parent_id) != str(city_id):
                 raise HTTPException(
                     status_code=400,
                     detail="Client not in shop city",
@@ -307,6 +527,9 @@ def preview_delivery_for_shop(
                 share=share_data,
                 is_cms=client_is_cms,
             )
+            if s_shop:
+                s_admin = s_admin + s_shop
+                s_shop = 0
 
             return {
                 "total_price": str(total_price),
@@ -316,13 +539,7 @@ def preview_delivery_for_shop(
                 "share_admin_region": str(s_admin),
             }
 
-            return {
-                "total_price": str(total_price),
-                "share_client": str(s_client),
-                "share_shop": str(s_shop),
-                "share_city": str(s_city),
-                "share_admin_region": str(s_admin),
-            }
+
 
 
 @router.get("/shop/configuration")
@@ -370,15 +587,18 @@ def list_shop_deliveries(
                 SELECT
                     d.id AS delivery_id,
                     d.delivery_date,
+                    d.client_id,
                     l.client_name,
                     l.address,
                     l.city_name,
+                    l.time_window,
                     l.bags,
                     l.order_amount,
                     l.is_cms,
+                    l.notes,
                     st.status,
                     f.total_price,
-                    f.share_shop
+                    f.share_admin_region
                 FROM delivery d
                 JOIN delivery_logistics l ON l.delivery_id = d.id
                 LEFT JOIN LATERAL (
@@ -401,6 +621,179 @@ def list_shop_deliveries(
             return {"rows": rows, "is_frozen": is_frozen}
 
 
+@router.get("/shop/export")
+def export_shop_deliveries(
+    month: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    user: MeResponse = Depends(require_shop_user),
+    jwt_claims: str = Depends(get_current_user_claims),
+):
+    shop_id = user.shop_id
+    if not shop_id:
+        raise HTTPException(status_code=400, detail="Shop id missing")
+
+    period_month = _parse_month(month)
+
+    with get_db_connection(jwt_claims) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    d.delivery_date,
+                    l.client_name,
+                    l.address,
+                    l.city_name,
+                    l.bags,
+                    f.share_admin_region,
+                    st.status,
+                    d.id::text AS delivery_id
+                FROM delivery d
+                JOIN delivery_logistics l ON l.delivery_id = d.id
+                LEFT JOIN delivery_financial f ON f.delivery_id = d.id
+                LEFT JOIN LATERAL (
+                    SELECT status
+                    FROM delivery_status
+                    WHERE delivery_id = d.id
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ) st ON true
+                WHERE d.shop_id = %s
+                  AND date_trunc('month', d.delivery_date)
+                    = date_trunc('month', %s::date)
+                ORDER BY d.delivery_date
+                """,
+                (shop_id, period_month),
+            )
+            rows = cur.fetchall()
+
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter=";")
+    writer.writerow(
+        [
+            "Date",
+            "Client",
+            "Adresse",
+            "Commune partenaire",
+            "Sacs",
+            "Montant facture (TTC)",
+            "Statut",
+            "Delivery ID",
+        ]
+    )
+    for (
+        delivery_date,
+        client_name,
+        address,
+        city_name,
+        bags,
+        share_admin_region,
+        status,
+        delivery_id,
+    ) in rows:
+        if isinstance(delivery_date, (datetime, date)):
+            delivery_date_value = delivery_date.strftime("%Y-%m-%d")
+        else:
+            delivery_date_value = str(delivery_date or "")
+        writer.writerow(
+            [
+                delivery_date_value,
+                client_name or "",
+                address or "",
+                city_name or "",
+                bags or 0,
+                f"{float(share_admin_region or 0):.2f}",
+                status or "",
+                delivery_id or "",
+            ]
+        )
+
+    output.seek(0)
+    filename = f"livraisons-commerce-{month}.csv"
+    headers = {"Content-Disposition": f"attachment; filename={filename}"}
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers=headers)
+
+
+@router.patch("/shop/{delivery_id}")
+def update_shop_delivery(
+    delivery_id: str,
+    payload: ShopDeliveryUpdate,
+    user: MeResponse = Depends(require_shop_user),
+    jwt_claims: str = Depends(get_current_user_claims),
+):
+    shop_id = user.shop_id
+    if not shop_id:
+        raise HTTPException(status_code=400, detail="Shop id missing")
+
+    with get_db_connection(jwt_claims) as conn:
+        with conn:
+            with conn.cursor() as cur:
+                return _apply_delivery_update(
+                    cur=cur,
+                    delivery_id=delivery_id,
+                    payload=payload,
+                    shop_id=str(shop_id),
+                )
+
+
+@router.post("/shop/{delivery_id}/cancel")
+def cancel_shop_delivery(
+    delivery_id: str,
+    payload: ShopDeliveryCancel,
+    user: MeResponse = Depends(require_shop_user),
+    jwt_claims: str = Depends(get_current_user_claims),
+):
+    shop_id = user.shop_id
+    if not shop_id:
+        raise HTTPException(status_code=400, detail="Shop id missing")
+
+    with get_db_connection(jwt_claims) as conn:
+        with conn:
+            with conn.cursor() as cur:
+                return _apply_delivery_cancel(
+                    cur=cur,
+                    delivery_id=delivery_id,
+                    shop_id=str(shop_id),
+                    reason=payload.reason,
+                )
+
+
+@router.patch("/admin/{delivery_id}")
+def update_delivery_admin(
+    delivery_id: str,
+    payload: ShopDeliveryUpdate,
+    user: MeResponse = Depends(require_admin_user),
+    jwt_claims: str = Depends(get_current_user_claims),
+):
+    with get_db_connection(jwt_claims) as conn:
+        with conn:
+            with conn.cursor() as cur:
+                shop_id = _assert_admin_delivery_access(cur, delivery_id, user)
+                return _apply_delivery_update(
+                    cur=cur,
+                    delivery_id=delivery_id,
+                    payload=payload,
+                    shop_id=shop_id,
+                )
+
+
+@router.post("/admin/{delivery_id}/cancel")
+def cancel_delivery_admin(
+    delivery_id: str,
+    payload: ShopDeliveryCancel,
+    user: MeResponse = Depends(require_admin_user),
+    jwt_claims: str = Depends(get_current_user_claims),
+):
+    with get_db_connection(jwt_claims) as conn:
+        with conn:
+            with conn.cursor() as cur:
+                shop_id = _assert_admin_delivery_access(cur, delivery_id, user)
+                return _apply_delivery_cancel(
+                    cur=cur,
+                    delivery_id=delivery_id,
+                    shop_id=shop_id,
+                    reason=payload.reason,
+                )
+
+
 @router.get("/shop/periods")
 def list_shop_periods(
     user: MeResponse = Depends(require_shop_user),
@@ -415,18 +808,37 @@ def list_shop_periods(
             cur.execute(
                 """
                 SELECT
-                    period_month,
-                    frozen_at,
-                    frozen_by,
-                    frozen_by_name,
-                    comment,
-                    frozen_comment,
-                    pdf_url,
-                    pdf_sha256,
-                    pdf_generated_at
-                FROM billing_period
-                WHERE shop_id = %s
-                ORDER BY period_month DESC
+                    bp.period_month,
+                    bp.frozen_at,
+                    bp.frozen_by,
+                    bp.frozen_by_name,
+                    bp.frozen_comment as comment,
+                    bp.pdf_url,
+                    bp.pdf_sha256,
+                    bp.pdf_generated_at,
+                    bp.shop_id,
+                    s.name as shop_name,
+                    COUNT(d.id) AS deliveries,
+                    COALESCE(SUM(f.share_admin_region), 0) AS amount_ttc
+                FROM billing_period bp
+                JOIN shop s ON s.id = bp.shop_id
+                LEFT JOIN delivery d
+                    ON d.shop_id = bp.shop_id
+                    AND date_trunc('month', d.delivery_date)::date = bp.period_month
+                LEFT JOIN delivery_financial f ON f.delivery_id = d.id
+                WHERE bp.shop_id = %s
+                GROUP BY
+                    bp.period_month,
+                    bp.frozen_at,
+                    bp.frozen_by,
+                    bp.frozen_by_name,
+                    bp.frozen_comment,
+                    bp.pdf_url,
+                    bp.pdf_sha256,
+                    bp.pdf_generated_at,
+                    bp.shop_id,
+                    s.name
+                ORDER BY bp.period_month DESC
                 """,
                 (shop_id,),
             )
@@ -446,26 +858,89 @@ def update_delivery_status(
     - created -> picked_up
     - picked_up -> delivered
     """
-    with get_db_connection(jwt_claims) as conn:
-        with conn:
-            with conn.cursor() as cur:
-                # 1. Verify existence
-                cur.execute(
-                    "SELECT id FROM delivery WHERE id = %s",
-                    (delivery_id,)
-                )
-                if not cur.fetchone():
-                    raise HTTPException(status_code=404, detail="Delivery not found")
+    try:
+        with get_db_connection(jwt_claims) as conn:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT
+                            d.courier_id,
+                            COALESCE((
+                                SELECT status
+                                FROM delivery_status
+                                WHERE delivery_id = d.id
+                                ORDER BY updated_at DESC
+                                LIMIT 1
+                            ), 'created') AS current_status
+                        FROM delivery d
+                        WHERE d.id = %s
+                        """,
+                        (delivery_id,),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        raise HTTPException(status_code=404, detail="Delivery not found")
 
-                cur.execute(
-                    """
-                    INSERT INTO delivery_status (delivery_id, status)
-                    VALUES (%s, %s)
-                    """,
-                    (delivery_id, status),
-                )
-    
-    return {"delivery_id": delivery_id, "status": status}
+                    assigned_courier_id, current_status = row
+
+                    if not assigned_courier_id:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Courier not assigned",
+                        )
+
+                    cur.execute(
+                        """
+                        SELECT id
+                        FROM courier
+                        WHERE user_id = %s
+                           OR (email IS NOT NULL AND lower(email) = lower(%s))
+                        LIMIT 1
+                        """,
+                        (user.user_id, user.email),
+                    )
+                    courier_row = cur.fetchone()
+                    if not courier_row:
+                        raise HTTPException(status_code=403, detail="Courier access required")
+
+                    courier_id = courier_row[0]
+                    if str(courier_id) != str(assigned_courier_id):
+                        raise HTTPException(status_code=403, detail="Not assigned to this delivery")
+
+                    if current_status == status:
+                        return {
+                            "delivery_id": delivery_id,
+                            "status": status,
+                            "previous_status": current_status,
+                        }
+
+                    valid_transitions = {
+                        "created": {"picked_up", "issue"},
+                        "assigned": {"picked_up", "issue"},
+                        "picked_up": {"delivered", "issue"},
+                        "issue": {"picked_up", "delivered"},
+                    }
+
+                    if status not in valid_transitions.get(current_status, set()):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Invalid status transition",
+                        )
+
+                    cur.execute(
+                        """
+                        INSERT INTO delivery_status (delivery_id, status)
+                        VALUES (%s, %s)
+                        """,
+                        (delivery_id, status),
+                    )
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {"delivery_id": delivery_id, "status": status, "previous_status": current_status}
 
 
 @router.get("/courier")
@@ -476,43 +951,63 @@ def list_courier_deliveries(
 ):
     target_date = date if date else datetime.now().date().isoformat()
 
-    with get_db_connection(jwt_claims) as conn:
-        with conn.cursor() as cur:
-            # If the courier is bound to a region, we could explicitly filter,
-            # but RLS should handle visibility.
-            # We explicitly filter by date.
-            
-            cur.execute(
-                """
-                SELECT
-                    d.id AS delivery_id,
-                    d.delivery_date,
-                    s.name AS shop_name,
-                    s.address AS shop_address,
-                    l.client_name,
-                    l.address AS client_address,
-                    l.postal_code AS client_postal_code,
-                    l.city_name AS client_city,
-                    l.time_window,
-                    l.bags,
-                    st.status,
-                    st.updated_at AS status_updated_at
-                FROM delivery d
-                JOIN shop s ON s.id = d.shop_id
-                JOIN delivery_logistics l ON l.delivery_id = d.id
-                LEFT JOIN LATERAL (
-                    SELECT status, updated_at
-                    FROM delivery_status
-                    WHERE delivery_id = d.id
-                    ORDER BY updated_at DESC
+    try:
+        with get_db_connection(jwt_claims) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id
+                    FROM courier
+                    WHERE user_id = %s
+                       OR (email IS NOT NULL AND lower(email) = lower(%s))
                     LIMIT 1
-                ) st ON true
-                WHERE d.delivery_date = %s::date
-                ORDER BY d.delivery_date, s.name
-                """,
-                (target_date,),
-            )
-            return _rows_to_dicts(cur)
+                    """,
+                    (user.user_id, user.email),
+                )
+                courier_row = cur.fetchone()
+                if not courier_row:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Courier access required",
+                    )
+                courier_id = courier_row[0]
+
+                cur.execute(
+                    """
+                    SELECT
+                        d.id AS delivery_id,
+                        d.delivery_date,
+                        s.name AS shop_name,
+                        s.address AS shop_address,
+                        l.client_name,
+                        l.address AS client_address,
+                        l.postal_code AS client_postal_code,
+                        l.city_name AS client_city,
+                        l.time_window,
+                        l.bags,
+                        st.status,
+                        st.updated_at AS status_updated_at
+                    FROM delivery d
+                    JOIN shop s ON s.id = d.shop_id
+                    JOIN delivery_logistics l ON l.delivery_id = d.id
+                    LEFT JOIN LATERAL (
+                        SELECT status, updated_at
+                        FROM delivery_status
+                        WHERE delivery_id = d.id
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                    ) st ON true
+                    WHERE d.delivery_date = %s::date
+                      AND d.courier_id = %s
+                    ORDER BY d.delivery_date, s.name
+                    """,
+                    (target_date, courier_id),
+                )
+                return _rows_to_dicts(cur)
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/customer")
@@ -522,13 +1017,6 @@ def list_customer_deliveries(
 ):
     with get_db_connection(jwt_claims) as conn:
         with conn.cursor() as cur:
-            # We assume the user.user_id (auth.uid()) maps to a client record via RLS or direct link.
-            # However, in current architecture, `require_customer_user` doesn't strictly enforce a link to a `client` table ID unless `resolve_identity` does.
-            # `resolve_identity` returns `role='customer'`.
-            # Let's assume for this "State of the Art" upgrade that RLS handles visibility based on auth.uid() owner.
-            # We will query deliveries where the logisitics/client might match the user.
-            # ACTUALLY: RLS policies are the source of truth. So we just query deliveries.
-            
             cur.execute(
                 """
                 SELECT
@@ -549,8 +1037,10 @@ def list_customer_deliveries(
                     ORDER BY updated_at DESC
                     LIMIT 1
                 ) st ON true
+                WHERE d.client_id = %s
                 ORDER BY d.delivery_date DESC
-                """
+                """,
+                (user.client_id,),
             )
             return _rows_to_dicts(cur)
 
@@ -563,6 +1053,21 @@ def _parse_month(month):
         return datetime.strptime(month, "%Y-%m").date()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid month format") from exc
+
+
+def _get_latest_status(cur, delivery_id: str) -> str | None:
+    cur.execute(
+        """
+        SELECT status
+        FROM delivery_status
+        WHERE delivery_id = %s
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        (delivery_id,),
+    )
+    row = cur.fetchone()
+    return row[0] if row else None
 
 
 def _is_period_frozen(cur, shop_id: str, period_month: date) -> bool:
@@ -599,6 +1104,258 @@ def _rows_to_dicts(cur):
     return results
 
 
+def _assert_admin_delivery_access(cur, delivery_id: str, user: MeResponse) -> str:
+    cur.execute(
+        """
+        SELECT d.shop_id, c.admin_region_id
+        FROM delivery d
+        JOIN shop s ON s.id = d.shop_id
+        JOIN city c ON c.id = s.city_id
+        WHERE d.id = %s
+        """,
+        (delivery_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+
+    shop_id, admin_region_id = row
+    if user.role != "super_admin":
+        if not user.admin_region_id or str(admin_region_id) != str(user.admin_region_id):
+            raise HTTPException(status_code=403, detail="Not in your region")
+    return str(shop_id)
+
+
+def _apply_delivery_update(
+    *,
+    cur,
+    delivery_id: str,
+    payload: ShopDeliveryUpdate,
+    shop_id: str,
+):
+    cur.execute(
+        """
+        SELECT
+            d.shop_id,
+            d.delivery_date,
+            d.client_id,
+            l.time_window,
+            l.bags,
+            l.order_amount,
+            l.notes,
+            l.is_cms
+        FROM delivery d
+        JOIN delivery_logistics l ON l.delivery_id = d.id
+        WHERE d.id = %s
+        """,
+        (delivery_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+
+    (
+        delivery_shop_id,
+        delivery_date,
+        client_id,
+        time_window,
+        bags,
+        order_amount,
+        notes,
+        is_cms,
+    ) = row
+
+    if str(delivery_shop_id) != str(shop_id):
+        raise HTTPException(status_code=403, detail="Not in your shop")
+
+    status = _get_latest_status(cur, delivery_id)
+    if status not in EDITABLE_STATUSES:
+        raise HTTPException(status_code=409, detail="Delivery is locked")
+
+    old_month = delivery_date.replace(day=1)
+    new_delivery_date = payload.delivery_date or delivery_date
+    new_month = new_delivery_date.replace(day=1)
+
+    if _is_period_frozen(cur, shop_id, old_month) or _is_period_frozen(cur, shop_id, new_month):
+        raise HTTPException(status_code=409, detail="Billing period is frozen")
+
+    new_time_window = payload.time_window if payload.time_window is not None else time_window
+    new_bags = payload.bags if payload.bags is not None else bags
+    new_order_amount = (
+        payload.order_amount if payload.order_amount is not None else order_amount
+    )
+    new_notes = payload.notes if payload.notes is not None else notes
+
+    cur.execute(
+        """
+        SELECT tariff_version_id
+        FROM shop
+        WHERE id = %s
+        """,
+        (shop_id,),
+    )
+    shop_row = cur.fetchone()
+    tariff_version_id = shop_row[0] if shop_row else None
+    if not tariff_version_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Tariff version not configured for shop",
+        )
+
+    cur.execute(
+        """
+        SELECT id, rule_type, rule, share
+        FROM tariff_version
+        WHERE id = %s
+          AND valid_from <= %s
+          AND (valid_to IS NULL OR valid_to >= %s)
+        LIMIT 1
+        """,
+        (str(tariff_version_id), new_delivery_date, new_delivery_date),
+    )
+    tariff_version = cur.fetchone()
+    if not tariff_version:
+        raise HTTPException(
+            status_code=400,
+            detail="No active tariff version for this date",
+        )
+
+    tariff_version_id, rule_type, rule, share = tariff_version
+    rule_data = parse_rule(rule)
+    share_data = parse_rule(share)
+    validate_tariff_rule(rule_type, rule_data, share_data)
+
+    total_price, s_client, s_shop, s_city, s_admin = compute_financials(
+        bags=new_bags,
+        order_amount=new_order_amount,
+        rule_type=rule_type,
+        rule=rule_data,
+        share=share_data,
+        is_cms=is_cms,
+    )
+    if s_shop:
+        s_admin = s_admin + s_shop
+        s_shop = 0
+
+    cur.execute(
+        """
+        UPDATE delivery
+        SET delivery_date = %s,
+            client_id = %s
+        WHERE id = %s
+        """,
+        (new_delivery_date, client_id, delivery_id),
+    )
+
+    cur.execute(
+        """
+        UPDATE delivery_logistics
+        SET time_window = %s,
+            bags = %s,
+            order_amount = %s,
+            notes = %s
+        WHERE delivery_id = %s
+        """,
+        (new_time_window, new_bags, new_order_amount, new_notes, delivery_id),
+    )
+
+    cur.execute(
+        """
+        UPDATE delivery_financial
+        SET tariff_version_id = %s,
+            total_price = %s,
+            share_client = %s,
+            share_shop = %s,
+            share_city = %s,
+            share_admin_region = %s
+        WHERE delivery_id = %s
+        """,
+        (
+            tariff_version_id,
+            total_price,
+            s_client,
+            s_shop,
+            s_city,
+            s_admin,
+            delivery_id,
+        ),
+    )
+    if cur.rowcount == 0:
+        _insert_delivery_financial(
+            cur,
+            delivery_id=delivery_id,
+            tariff_version_id=tariff_version_id,
+            total_price=total_price,
+            client_share=s_client,
+            shop_share=s_shop,
+            city_share=s_city,
+            admin_share=s_admin,
+        )
+
+    return {
+        "delivery_id": delivery_id,
+        "status": status,
+        "delivery_date": new_delivery_date,
+        "bags": new_bags,
+        "order_amount": new_order_amount,
+        "share_admin_region": str(s_admin),
+    }
+
+
+def _apply_delivery_cancel(
+    *,
+    cur,
+    delivery_id: str,
+    shop_id: str,
+    reason: str | None,
+):
+    cur.execute(
+        """
+        SELECT d.shop_id, d.delivery_date, l.notes
+        FROM delivery d
+        JOIN delivery_logistics l ON l.delivery_id = d.id
+        WHERE d.id = %s
+        """,
+        (delivery_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+
+    delivery_shop_id, delivery_date, notes = row
+    if str(delivery_shop_id) != str(shop_id):
+        raise HTTPException(status_code=403, detail="Not in your shop")
+
+    status = _get_latest_status(cur, delivery_id)
+    if status not in EDITABLE_STATUSES:
+        raise HTTPException(status_code=409, detail="Delivery is locked")
+
+    if _is_period_frozen(cur, shop_id, delivery_date.replace(day=1)):
+        raise HTTPException(status_code=409, detail="Billing period is frozen")
+
+    if reason:
+        prefix = notes + "\n" if notes else ""
+        notes = f"{prefix}Annulation: {reason}".strip()
+        cur.execute(
+            """
+            UPDATE delivery_logistics
+            SET notes = %s
+            WHERE delivery_id = %s
+            """,
+            (notes, delivery_id),
+        )
+
+    cur.execute(
+        """
+        INSERT INTO delivery_status (delivery_id, status)
+        VALUES (%s, 'cancelled')
+        """,
+        (delivery_id,),
+    )
+
+    return {"delivery_id": delivery_id, "status": "cancelled"}
+
+
 def _create_delivery_core(
     *,
     cur,
@@ -611,6 +1368,8 @@ def _create_delivery_core(
     client: dict,
     payload: ShopDeliveryCreate,
     tariff_version,
+    distance_km: float | None = None,
+    co2_saved_kg: float | None = None,
 ):
     tariff_version_id, rule_type, rule, share = tariff_version
     rule_data = parse_rule(rule)
@@ -625,6 +1384,9 @@ def _create_delivery_core(
         share=share_data,
         is_cms=client["is_cms"],
     )
+    if s_shop:
+        s_admin = s_admin + s_shop
+        s_shop = 0
 
     _insert_delivery_record(
         cur,
@@ -636,7 +1398,18 @@ def _create_delivery_core(
         canton_id=canton_id,
         delivery_date=payload.delivery_date,
         client_id=client["id"],
+        distance_km=distance_km,
+        co2_saved_kg=co2_saved_kg,
     )
+
+    import random
+    import string
+    
+    # Generate Short Code (3 chars, Uppercase + Digits)
+    # Ex: A7X, 3B9
+    # Collision probability is low enough for daily operations per shop
+    chars = string.ascii_uppercase + string.digits
+    short_code = ''.join(random.choice(chars) for _ in range(3))
 
     _insert_delivery_logistics(
         cur,
@@ -649,6 +1422,8 @@ def _create_delivery_core(
         bags=payload.bags,
         order_amount=payload.order_amount,
         is_cms=client["is_cms"],
+        notes=payload.notes,
+        short_code=short_code,
     )
 
     cur.execute(
@@ -688,6 +1463,8 @@ def _insert_delivery_record(
     canton_id: str,
     delivery_date: date,
     client_id: str | None,
+    distance_km: float | None = None,
+    co2_saved_kg: float | None = None,
 ):
     if client_id is None:
         cur.execute(
@@ -699,8 +1476,10 @@ def _insert_delivery_record(
                 admin_region_id,
                 city_id,
                 canton_id,
-                delivery_date
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                delivery_date,
+                distance_km,
+                co2_saved_kg
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 delivery_id,
@@ -710,6 +1489,8 @@ def _insert_delivery_record(
                 city_id,
                 canton_id,
                 delivery_date,
+                distance_km,
+                co2_saved_kg,
             ),
         )
         return
@@ -724,8 +1505,10 @@ def _insert_delivery_record(
             city_id,
             canton_id,
             delivery_date,
-            client_id
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            client_id,
+            distance_km,
+            co2_saved_kg
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             delivery_id,
@@ -736,6 +1519,8 @@ def _insert_delivery_record(
             canton_id,
             delivery_date,
             client_id,
+            distance_km,
+            co2_saved_kg,
         ),
     )
 
@@ -752,6 +1537,8 @@ def _insert_delivery_logistics(
     bags: int,
     order_amount: Decimal | float | None,
     is_cms: bool,
+    notes: str | None = None,
+    short_code: str | None = None,
 ):
     # Snapshot client details at delivery time.
     if client_name is None:
@@ -765,8 +1552,9 @@ def _insert_delivery_logistics(
                 time_window,
                 bags,
                 order_amount,
-                is_cms
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                is_cms,
+                short_code
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 delivery_id,
@@ -777,6 +1565,7 @@ def _insert_delivery_logistics(
                 bags,
                 order_amount,
                 is_cms,
+                short_code,
             ),
         )
         return
@@ -792,8 +1581,10 @@ def _insert_delivery_logistics(
             time_window,
             bags,
             order_amount,
-            is_cms
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            is_cms,
+            notes,
+            short_code
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             delivery_id,
@@ -805,8 +1596,12 @@ def _insert_delivery_logistics(
             bags,
             order_amount,
             is_cms,
+            notes,
+            short_code
         ),
     )
+
+
 
 
 def _insert_delivery_status(cur, *, delivery_id):
@@ -817,3 +1612,61 @@ def _insert_delivery_status(cur, *, delivery_id):
         """,
         (delivery_id,),
     )
+
+def _insert_delivery_financial(
+    cur,
+    *,
+    delivery_id,
+    tariff_version_id: str | None,
+    total_price: Decimal,
+    client_share: Decimal,
+    shop_share: Decimal,
+    city_share: Decimal,
+    admin_share: Decimal,
+):
+    cur.execute(
+        """
+        INSERT INTO delivery_financial (
+            delivery_id,
+            tariff_version_id,
+            total_price,
+            share_client,
+            share_shop,
+            share_city,
+            share_admin_region
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            delivery_id,
+            tariff_version_id,
+            total_price,
+            client_share,
+            shop_share,
+            city_share,
+            admin_share,
+        ),
+    )
+
+
+def _resolve_city_by_postal_code(cur, postal_code: str):
+    if not postal_code:
+        return None
+    cur.execute(
+        """
+        SELECT c.id, c.parent_city_id, c.admin_region_id
+        FROM city_postal_code pc
+        JOIN city c ON c.id = pc.city_id
+        WHERE pc.postal_code = %s
+        LIMIT 1
+        """,
+        (postal_code,),
+    )
+    return cur.fetchone()
+
+
+def _get_city_parent_id(cur, city_id: str):
+    if not city_id:
+        return None
+    cur.execute("SELECT parent_city_id FROM city WHERE id = %s", (city_id,))
+    row = cur.fetchone()
+    return row[0] if row else None

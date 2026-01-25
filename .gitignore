@@ -16,5 +16,3 @@ npm-debug.log*
 .env
 .env.local
 
-# Cursor (optionnel)
-.cursor/

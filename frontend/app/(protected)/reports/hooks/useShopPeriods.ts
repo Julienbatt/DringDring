@@ -10,6 +10,10 @@ export type ShopPeriodRow = {
   frozen_by: string
   frozen_by_name?: string | null
   comment?: string | null
+  shop_id?: string
+  shop_name?: string | null
+  deliveries?: number | string | null
+  amount_ttc?: number | string | null
 }
 
 export function useShopPeriods() {

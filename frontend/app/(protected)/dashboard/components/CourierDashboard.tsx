@@ -2,8 +2,6 @@
 
 import { useState } from 'react'
 import { useCourierDeliveries } from '../hooks/useCourierDeliveries'
-import { useCourierActions } from '../hooks/useCourierActions'
-import { toast } from 'sonner'
 
 function getToday() {
     const now = new Date()
@@ -18,20 +16,9 @@ function formatTime(isoString: string | null) {
 export default function CourierDashboard() {
     const [selectedDate, setSelectedDate] = useState(getToday())
     const { data, loading, error, refresh } = useCourierDeliveries(selectedDate)
-    const { updateStatus, updating } = useCourierActions()
 
     const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         setSelectedDate(e.target.value)
-    }
-
-    const handleAction = async (deliveryId: string, nextStatus: 'picked_up' | 'delivered') => {
-        const success = await updateStatus(deliveryId, nextStatus)
-        if (success) {
-            toast.success(nextStatus === 'picked_up' ? 'Colis récupéré !' : 'Colis livré avec succès !')
-            refresh()
-        } else {
-            toast.error("Erreur lors de la mise à jour du statut")
-        }
     }
 
     const getMapLink = (address: string, postal: string, city: string) => {
@@ -67,7 +54,6 @@ export default function CourierDashboard() {
                 </div>
             ) : !data || data.length === 0 ? (
                 <div className="bg-white border border-gray-200 text-gray-600 p-12 rounded-xl text-center shadow-sm flex flex-col items-center gap-4">
-                    <div className="text-4xl">😴</div>
                     <p>Aucune livraison prévue pour cette date.</p>
                 </div>
             ) : (
@@ -86,10 +72,8 @@ export default function CourierDashboard() {
 
                     <div className="grid gap-6">
                         {data.map((delivery) => {
-                            const isPickedUp = delivery.status === 'picked_up'
                             const isDelivered = delivery.status === 'delivered'
-                            const isPending = delivery.status === 'created'
-                            const isUpdating = updating === delivery.delivery_id
+                            const isPending = !isDelivered
 
                             return (
                                 <div
@@ -101,11 +85,8 @@ export default function CourierDashboard() {
                                         <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
                                             {delivery.time_window}
                                         </span>
-                                        <div className={`px-2 py-0.5 rounded-full text-xs font-bold ${isDelivered ? 'bg-green-100 text-green-700' :
-                                            isPickedUp ? 'bg-blue-100 text-blue-700' :
-                                                'bg-gray-200 text-gray-700'
-                                            }`}>
-                                            {isDelivered ? 'LIVRÉ' : isPickedUp ? 'EN ROUTE' : 'À RÉCUPÉRER'}
+                                        <div className={`px-2 py-0.5 rounded-full text-xs font-bold ${isDelivered ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-700'}`}>
+                                            {isDelivered ? 'LIVREE' : 'A RECUPERER'}
                                         </div>
                                     </div>
 
@@ -133,25 +114,19 @@ export default function CourierDashboard() {
                                                 </a>
                                             </div>
                                             <div className="mt-2 inline-flex items-center gap-2 bg-gray-100 px-2 py-1 rounded text-sm font-medium text-gray-700">
-                                                🛍️ {delivery.bags} Sacs
+                                                Sacs: {delivery.bags}
                                             </div>
 
                                             {isPending && (
-                                                <div className="mt-4">
-                                                    <button
-                                                        onClick={() => handleAction(delivery.delivery_id, 'picked_up')}
-                                                        disabled={isUpdating}
-                                                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg shadow transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-                                                    >
-                                                        {isUpdating ? 'Traitement...' : '📍 Confirmer Prise en charge'}
-                                                    </button>
+                                                <div className="mt-4 text-sm text-gray-500">
+                                                    Statut en attente de livraison.
                                                 </div>
                                             )}
                                         </div>
 
                                         {/* Dropoff Section */}
-                                        <div className={`relative pl-6 border-l-2 ${isPickedUp ? 'border-green-500' : 'border-gray-200'}`}>
-                                            <div className={`absolute -left-[9px] top-0 w-4 h-4 rounded-full border-2 ${isPickedUp ? 'bg-green-500 border-green-500' : 'bg-white border-gray-300'}`}></div>
+                                        <div className={`relative pl-6 border-l-2 ${isDelivered ? 'border-green-500' : 'border-gray-200'}`}>
+                                            <div className={`absolute -left-[9px] top-0 w-4 h-4 rounded-full border-2 ${isDelivered ? 'bg-green-500 border-green-500' : 'bg-white border-gray-300'}`}></div>
                                             <div className="flex justify-between items-start">
                                                 <div>
                                                     <h3 className="text-sm font-medium text-gray-500 mb-1">Livraison</h3>
@@ -175,15 +150,9 @@ export default function CourierDashboard() {
                                                 </a>
                                             </div>
 
-                                            {isPickedUp && (
-                                                <div className="mt-4">
-                                                    <button
-                                                        onClick={() => handleAction(delivery.delivery_id, 'delivered')}
-                                                        disabled={isUpdating}
-                                                        className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-4 rounded-lg shadow transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-                                                    >
-                                                        {isUpdating ? 'Traitement...' : '✅ Confirmer Livraison'}
-                                                    </button>
+                                            {isDelivered && (
+                                                <div className="mt-4 text-sm text-green-600 font-medium">
+                                                    Livraison terminee.
                                                 </div>
                                             )}
                                         </div>

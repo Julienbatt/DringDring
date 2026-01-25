@@ -71,8 +71,20 @@ def _compute_total_price(
 ):
     pricing = _resolve_pricing(rule)
 
-    if rule_type == "bags":
-        price_per_2_bags = Decimal(str(pricing.get("price_per_2_bags", 0)))
+    if rule_type == "bags" or rule_type == "bags_price":
+        price_per_2_bags_raw = pricing.get("price_per_2_bags")
+        if price_per_2_bags_raw is None:
+            price_per_bag_raw = pricing.get(
+                "price_per_bag",
+                pricing.get("amount_per_bag"),
+            )
+            if price_per_bag_raw is not None:
+                price_per_2_bags = Decimal(str(price_per_bag_raw)) * 2
+            else:
+                price_per_2_bags = Decimal("0")
+        else:
+            price_per_2_bags = Decimal(str(price_per_2_bags_raw))
+
         cms_discount = Decimal(str(pricing.get("cms_discount", 0)))
         blocks = (bags + 1) // 2
         if is_cms:
@@ -87,6 +99,24 @@ def _compute_total_price(
                 status_code=400,
                 detail="order_amount required for order_amount tariff",
             )
+        
+        # Support for Threshold List (Step Pricing) - Priority
+        thresholds = pricing.get("thresholds") # List of {min, max, price}
+        if isinstance(thresholds, list) and thresholds:
+            amount = Decimal(str(order_amount))
+            for t in thresholds:
+                t_min = Decimal(str(t.get("min", 0)))
+                t_max = Decimal(str(t.get("max", "Infinity"))) if t.get("max") else Decimal("Infinity")
+                t_price = Decimal(str(t.get("price", 0)))
+                
+                if t_min <= amount < t_max:
+                    return t_price
+            
+            # Fallback if no range matches (Should not happen if last max is infinite)
+            # Return last threshold price or 0
+            return Decimal(str(thresholds[-1].get("price", 0)))
+
+        # Legacy / Linear Logic
         percent_of_order = Decimal(str(pricing.get("percent_of_order", 0)))
         minimum_fee = Decimal(str(pricing.get("minimum_fee", 0)))
         maximum_fee_raw = pricing.get("maximum_fee")

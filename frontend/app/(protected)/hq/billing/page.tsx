@@ -4,14 +4,7 @@ import { Suspense, useState, useEffect } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { format } from "date-fns"
 import { fr } from "date-fns/locale"
-import {
-  Download,
-  Lock,
-  Unlock,
-  AlertCircle,
-  FileText,
-  Loader2
-} from "lucide-react"
+import { Download, FileText, Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -32,25 +25,18 @@ import {
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 
 import { createClient } from "@/lib/supabase/client"
 import { Session } from "@supabase/supabase-js"
+import { API_BASE_URL } from "@/lib/api"
+import { useAuth } from "@/app/(protected)/providers/AuthProvider"
 
-// Types based on backend /reports/hq-billing response
 interface BillingRow {
   shop_id: string
   shop_name: string
+  hq_id?: string | null
+  hq_name?: string | null
   city_name: string
   total_deliveries: number
   total_bags: number
@@ -67,25 +53,40 @@ interface BillingResponse {
   rows: BillingRow[]
 }
 
+interface BillingDelivery {
+  delivery_id: string
+  delivery_date: string
+  shop_id: string
+  shop_name: string
+  hq_id?: string | null
+  city_name: string
+  client_name: string | null
+  address: string | null
+  postal_code: string | null
+  delivery_city: string | null
+  bags: number | null
+  time_window: string | null
+  total_price: number | string | null
+  share_admin_region: number | string | null
+  share_city: number | string | null
+  share_client: number | string | null
+}
 
 function HqBillingContent() {
   const [session, setSession] = useState<Session | null>(null)
   const supabase = createClient()
+  const { user } = useAuth()
   const searchParams = useSearchParams()
   const router = useRouter()
 
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<BillingResponse | null>(null)
+  const [details, setDetails] = useState<BillingDelivery[]>([])
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [selectedShopId, setSelectedShopId] = useState<string>('all')
 
-  // Default to current month or query param
   const currentMonth = format(new Date(), "yyyy-MM")
   const selectedMonth = searchParams.get("month") || currentMonth
-
-  // Freeze Modal State
-  const [freezeOpen, setFreezeOpen] = useState(false)
-  const [selectedShop, setSelectedShop] = useState<BillingRow | null>(null)
-  const [freezeComment, setFreezeComment] = useState("")
-  const [freezing, setFreezing] = useState(false)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -94,28 +95,32 @@ function HqBillingContent() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession)
     })
 
     return () => subscription.unsubscribe()
-  }, [])
+  }, [supabase])
 
   useEffect(() => {
     fetchBillingData(selectedMonth)
+    fetchBillingDetails(selectedMonth)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMonth, session])
 
   const fetchBillingData = async (month: string) => {
-    if (!session?.access_token) return
+    const token = session?.access_token
+    const apiUrl = API_BASE_URL
+    if (!token || !apiUrl) return
+
     setLoading(true)
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/reports/hq-billing?month=${month}`, {
+      const res = await fetch(`${apiUrl}/reports/hq-billing?month=${month}`, {
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${token}`,
         },
       })
-      if (!res.ok) throw new Error("Erreur lors du chargement des données")
+      if (!res.ok) throw new Error("Erreur lors du chargement des donnees")
       const json = await res.json()
       setData(json)
     } catch (err: any) {
@@ -127,75 +132,59 @@ function HqBillingContent() {
     }
   }
 
-  const handleMonthChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    router.push(`/hq/billing?month=${e.target.value}`)
-  }
+  const fetchBillingDetails = async (month: string) => {
+    const token = session?.access_token
+    const apiUrl = API_BASE_URL
+    if (!token || !apiUrl) return
 
-  const handleFreezeClick = (row: BillingRow) => {
-    setSelectedShop(row)
-    setFreezeComment("")
-    setFreezeOpen(true)
-  }
-
-  const confirmFreeze = async () => {
-    if (!selectedShop || !session?.access_token) return
-    setFreezing(true)
+    setDetailLoading(true)
     try {
-      const url = new URL(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/deliveries/shop/freeze`)
-      url.searchParams.append("shop_id", selectedShop.shop_id)
-      url.searchParams.append("month", selectedMonth)
-      if (freezeComment) {
-        url.searchParams.append("frozen_comment", freezeComment)
-      }
-
-      const res = await fetch(url.toString(), {
-        method: "POST",
+      const res = await fetch(`${apiUrl}/reports/hq-billing-deliveries?month=${month}`, {
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${token}`,
         },
       })
-
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.detail || "Erreur lors du gel de la période")
-      }
-
-      toast.success("Période gelée", {
-        description: `La facturation pour ${selectedShop.shop_name} a été validée.`,
-      })
-      setFreezeOpen(false)
-      fetchBillingData(selectedMonth) // Refresh
+      if (!res.ok) throw new Error("Erreur lors du chargement des details")
+      const json = await res.json()
+      setDetails(json)
     } catch (err: any) {
       toast.error("Erreur", {
         description: err.message,
       })
     } finally {
-      setFreezing(false)
+      setDetailLoading(false)
     }
+  }
+
+  const handleMonthChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    router.push(`/hq/billing?month=${e.target.value}`)
   }
 
   const handleDownloadPdf = async (shop: BillingRow) => {
     if (!session?.access_token) return
+    const apiUrl = API_BASE_URL
+    if (!apiUrl) return
+
     try {
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/reports/shop-monthly-pdf?shop_id=${shop.shop_id}&month=${selectedMonth}`,
+        `${apiUrl}/reports/shop-monthly-pdf?shop_id=${shop.shop_id}&month=${selectedMonth}`,
         {
           headers: { Authorization: `Bearer ${session.access_token}` },
         }
       )
-      if (!res.ok) throw new Error("Impossible de télécharger le PDF")
+      if (!res.ok) throw new Error("Impossible de telecharger le PDF")
 
       const blob = await res.blob()
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
-      a.download = `Facture_${shop.shop_name.replace(/\s+/g, '_')}_${selectedMonth}.pdf`
+      a.download = `Facture_${shop.shop_name.replace(/\s+/g, "_")}_${selectedMonth}.pdf`
       document.body.appendChild(a)
       a.click()
       window.URL.revokeObjectURL(url)
       document.body.removeChild(a)
     } catch (err: any) {
-      toast.error("Erreur téléchargement", {
+      toast.error("Erreur telechargement", {
         description: err.message,
       })
     }
@@ -203,15 +192,22 @@ function HqBillingContent() {
 
   const downloadZip = async () => {
     if (!session?.access_token) return
+    const apiUrl = API_BASE_URL
+    if (!apiUrl) return
+
     try {
-      toast("Préparation de l'archive...", { description: "Cela peut prendre quelques secondes." })
+      toast.info("Fonctionnalite temporairement indisponible.")
+      return
+      /*
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/reports/hq-billing/zip?month=${selectedMonth}`,
+        `${apiUrl}/reports/hq-billing/zip?month=${selectedMonth}`,
         {
           headers: { Authorization: `Bearer ${session.access_token}` },
         }
       )
-      if (!res.ok) throw new Error("Impossible de créer l'archive ZIP (vérifiez que des périodes sont gelées)")
+      if (!res.ok) {
+        throw new Error("Impossible de creer l archive ZIP (verifiez que des documents sont disponibles)")
+      }
 
       const blob = await res.blob()
       const url = window.URL.createObjectURL(blob)
@@ -222,28 +218,43 @@ function HqBillingContent() {
       a.click()
       window.URL.revokeObjectURL(url)
       document.body.removeChild(a)
+      */
     } catch (err: any) {
-      toast.error("Erreur Export ZIP", {
+      toast.error("Erreur export ZIP", {
         description: err.message,
       })
     }
   }
 
   const formatCurrency = (val: number | string) => {
-    return new Intl.NumberFormat('fr-CH', { style: 'currency', currency: 'CHF' }).format(Number(val))
+    return new Intl.NumberFormat("fr-CH", { style: "currency", currency: "CHF" }).format(
+      Number(val)
+    )
   }
+
+  const filteredRows = user?.hq_id
+    ? (data?.rows ?? []).filter((row) => row.hq_id === user.hq_id)
+    : data?.rows ?? []
+
+  const filteredDetails = user?.hq_id
+    ? details.filter((row) => row.hq_id === user.hq_id)
+    : details
+
+  const visibleDetails = selectedShopId === 'all'
+    ? filteredDetails
+    : filteredDetails.filter((row) => row.shop_id === selectedShopId)
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Facturation Officielle</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Facturation officielle</h1>
           <p className="text-muted-foreground">
-            Validation des périodes de facturation et archivage des preuves transactionnelles.
+            Historique des factures et preuves transactionnelles pour vos commerces.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Label htmlFor="month-select" className="whitespace-nowrap">Période :</Label>
+          <Label htmlFor="month-select" className="whitespace-nowrap">Periode :</Label>
           <Input
             id="month-select"
             type="month"
@@ -251,17 +262,7 @@ function HqBillingContent() {
             onChange={handleMonthChange}
             className="w-[180px]"
           />
-          <Button
-            variant="outline"
-            onClick={() => {
-              const url = `${process.env.NEXT_PUBLIC_API_URL}/api/v1/reports/hq-billing/zip?month=${selectedMonth}`
-              const a = document.createElement("a")
-              a.href = url
-              // Add auth token if needed via fetch, but direct link is simpler for now IF cookie auth or simple token param.
-              // Since we need Bearer token, we must use fetch + blob pattern like handleDownloadPdf.
-              downloadZip()
-            }}
-          >
+          <Button variant="outline" onClick={downloadZip}>
             <Download className="mr-2 h-4 w-4" />
             Tout (ZIP)
           </Button>
@@ -270,9 +271,9 @@ function HqBillingContent() {
 
       <Card>
         <CardHeader>
-          <CardTitle>État de la Facturation ({format(new Date(selectedMonth), "MMMM yyyy", { locale: fr })})</CardTitle>
+          <CardTitle>Etat de la facturation ({format(new Date(selectedMonth), "MMMM yyyy", { locale: fr })})</CardTitle>
           <CardDescription>
-            Gérez le statut de facturation pour chaque commerce. Une fois gelée ("Frozen"), une facture ne peut plus être modifiée.
+            Suivi des documents disponibles pour chaque commerce.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -285,23 +286,23 @@ function HqBillingContent() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Commerce</TableHead>
-                  <TableHead>Ville</TableHead>
+                  <TableHead>Commune partenaire</TableHead>
                   <TableHead className="text-right">Livraisons</TableHead>
                   <TableHead className="text-right">Sacs</TableHead>
                   <TableHead className="text-right">Montant (CHF)</TableHead>
-                  <TableHead className="text-center">Statut</TableHead>
+                  <TableHead className="text-center">Document</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data?.rows.length === 0 ? (
+                {filteredRows.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center h-24 text-muted-foreground">
-                      Aucune donnée pour cette période.
+                      Aucune donnee pour cette periode.
                     </TableCell>
                   </TableRow>
                 ) : (
-                  data?.rows.map((row) => (
+                  filteredRows.map((row) => (
                     <TableRow key={row.shop_id}>
                       <TableCell className="font-medium">{row.shop_name}</TableCell>
                       <TableCell>{row.city_name}</TableCell>
@@ -313,11 +314,11 @@ function HqBillingContent() {
                       <TableCell className="text-center">
                         {row.is_frozen ? (
                           <Badge variant="default" className="bg-green-600 hover:bg-green-700">
-                            <Lock className="mr-1 h-3 w-3" /> Gelé
+                            PDF disponible
                           </Badge>
                         ) : (
                           <Badge variant="outline" className="text-yellow-600 border-yellow-600">
-                            <Unlock className="mr-1 h-3 w-3" /> Ouvert
+                            En preparation
                           </Badge>
                         )}
                       </TableCell>
@@ -328,17 +329,13 @@ function HqBillingContent() {
                               variant="ghost"
                               size="sm"
                               onClick={() => handleDownloadPdf(row)}
-                              title="Télécharger la preuve PDF"
+                              title="Telecharger la preuve PDF"
                             >
                               <FileText className="h-4 w-4 mr-2" /> PDF
                             </Button>
                           ) : (
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              onClick={() => handleFreezeClick(row)}
-                            >
-                              Geler
+                            <Button variant="secondary" size="sm" disabled>
+                              En attente
                             </Button>
                           )}
                         </div>
@@ -352,40 +349,77 @@ function HqBillingContent() {
         </CardContent>
       </Card>
 
-      <Dialog open={freezeOpen} onOpenChange={setFreezeOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Confirmer le gel de la période</DialogTitle>
-            <DialogDescription>
-              Vous êtes sur le point de geler la facturation pour <strong>{selectedShop?.shop_name}</strong> pour le mois de <strong>{selectedMonth}</strong>.
-              <br /><br />
-              <span className="flex items-center text-yellow-600 font-medium">
-                <AlertCircle className="h-4 w-4 mr-2" />
-                Cette action est irréversible.
-              </span>
-              Un document PDF signé numériquement sera généré et archivé.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="py-4">
-            <Label htmlFor="comment" className="mb-2 block">Commentaire (Audit)</Label>
-            <Textarea
-              id="comment"
-              placeholder="Raison du gel / Validation..."
-              value={freezeComment}
-              onChange={(e) => setFreezeComment(e.target.value)}
-            />
+      <Card>
+        <CardHeader>
+          <CardTitle>Detail des courses</CardTitle>
+          <CardDescription>
+            Toutes les livraisons de la periode, avec filtrage par commerce.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div className="text-sm text-muted-foreground">
+              {visibleDetails.length} livraisons affichees
+            </div>
+            <select
+              className="border rounded px-3 py-2 text-sm"
+              value={selectedShopId}
+              onChange={(e) => setSelectedShopId(e.target.value)}
+            >
+              <option value="all">Tous les commerces</option>
+              {filteredRows.map((row) => (
+                <option key={row.shop_id} value={row.shop_id}>
+                  {row.shop_name}
+                </option>
+              ))}
+            </select>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setFreezeOpen(false)} disabled={freezing}>
-              Annuler
-            </Button>
-            <Button onClick={confirmFreeze} disabled={freezing}>
-              {freezing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Confirmer le Gel
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Date</TableHead>
+                <TableHead>Commerce</TableHead>
+                <TableHead>Client</TableHead>
+                <TableHead>Adresse</TableHead>
+                <TableHead>NPA</TableHead>
+                <TableHead>Commune</TableHead>
+                <TableHead className="text-right">Sacs</TableHead>
+                <TableHead className="text-right">Montant HQ</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {detailLoading ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="h-20 text-center">
+                    Chargement...
+                  </TableCell>
+                </TableRow>
+              ) : visibleDetails.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="h-20 text-center text-muted-foreground">
+                    Aucune livraison pour cette periode.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                visibleDetails.map((row) => (
+                  <TableRow key={row.delivery_id}>
+                    <TableCell>{new Date(row.delivery_date).toLocaleDateString('fr-CH')}</TableCell>
+                    <TableCell>{row.shop_name}</TableCell>
+                    <TableCell>{row.client_name || '-'}</TableCell>
+                    <TableCell>{row.address || '-'}</TableCell>
+                    <TableCell>{row.postal_code || '-'}</TableCell>
+                    <TableCell>{row.delivery_city || row.city_name}</TableCell>
+                    <TableCell className="text-right">{row.bags ?? '-'}</TableCell>
+                    <TableCell className="text-right">
+                      {formatCurrency(row.share_admin_region || 0)}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
     </div>
   )
 }

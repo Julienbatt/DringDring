@@ -84,7 +84,7 @@ with conn.cursor() as cur:
     pass
 
 # Mock Supabase Storage Upload
-patcher_upload = patch("app.routes.deliveries.upload_pdf_bytes")
+patcher_upload = patch("app.core.billing_processing.upload_pdf_bytes")
 mock_upload = patcher_upload.start()
 mock_upload.return_value = f"shop/{shop_id}/{current_month_str}.pdf"
 

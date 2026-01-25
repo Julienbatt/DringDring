@@ -11,6 +11,9 @@ export type ShopClient = {
   postal_code: string | null
   city_name: string | null
   is_cms: boolean | null
+  floor?: string | null
+  door_code?: string | null
+  phone?: string | null
 }
 
 export function useShopClients() {

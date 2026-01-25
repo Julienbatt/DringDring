@@ -24,4 +24,5 @@ The guards live in `backend/app/core/guards.py`.
 
 ## Notes
 - All guards resolve identity through `resolve_identity` (DB + RLS).
-- The backend is the source of truth for role checks.
+- Roles must be kept in sync between `public.profiles` and JWT claims (`app_metadata` or `user_metadata`).
+- RLS policies enforce access using JWT claims, while API guards use `public.profiles`.

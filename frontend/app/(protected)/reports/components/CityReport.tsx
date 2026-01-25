@@ -5,6 +5,8 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useCityBilling } from '../../dashboard/hooks/useCityBilling'
 import { useCityBillingShops } from '../../dashboard/hooks/useCityBillingShops'
+import { API_BASE_URL } from '@/lib/api'
+import { useEcoStats } from '@/app/(protected)/hooks/useEcoStats'
 
 function formatCHF(value: number) {
   return `CHF ${value.toLocaleString('fr-CH', {
@@ -50,8 +52,7 @@ async function downloadCsv(path: string, filename: string) {
   const session = sessionData.session
   if (!session) return
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL
-  if (!apiUrl) return
+  const apiUrl = API_BASE_URL
 
   const res = await fetch(`${apiUrl}${path}`, {
     headers: { Authorization: `Bearer ${session.access_token}` },
@@ -77,8 +78,7 @@ async function downloadPdf(path: string, filename: string) {
   const session = sessionData.session
   if (!session) return
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL
-  if (!apiUrl) return
+  const apiUrl = API_BASE_URL
 
   const res = await fetch(`${apiUrl}${path}`, {
     headers: { Authorization: `Bearer ${session.access_token}` },
@@ -120,6 +120,7 @@ export default function CityReport() {
     loading: shopLoading,
     error: shopError,
   } = useCityBillingShops(selectedMonth)
+  const { data: ecoStats, loading: ecoLoading } = useEcoStats(selectedMonth)
 
   const handleMonthChange = (value: string) => {
     setSelectedMonth(value)
@@ -167,14 +168,14 @@ export default function CityReport() {
     0
   )
 
-  const cityName = data[0]?.city_name ?? data[0]?.city_id ?? 'Ville'
+  const cityName = data[0]?.city_name ?? data[0]?.city_id ?? 'Commune partenaire'
   const cityId = data[0]?.city_id ?? ''
   const detailRows = shopData ?? []
 
   const handleExport = async () => {
     await downloadCsv(
       `/reports/city-billing/export?month=${encodeURIComponent(selectedMonth)}`,
-      'facturation-ville.csv'
+        'facturation-commune.csv'
     )
   }
 
@@ -184,7 +185,7 @@ export default function CityReport() {
       `/reports/city-monthly-pdf?city_id=${encodeURIComponent(
         cityId
       )}&month=${encodeURIComponent(selectedMonth)}`,
-      `facturation-ville-${selectedMonth}.pdf`
+      `facturation-commune-${selectedMonth}.pdf`
     )
   }
 
@@ -192,9 +193,9 @@ export default function CityReport() {
     <div className="p-8 space-y-8">
       <header className="space-y-3">
         <div>
-          <h1 className="text-2xl font-semibold">
-            Facturation - Ville de {cityName}
-          </h1>
+            <h1 className="text-2xl font-semibold">
+              Facturation - Commune partenaire de {cityName}
+            </h1>
           <p className="text-sm text-gray-500">
             Periode : {formatMonth(selectedMonth)}
           </p>
@@ -232,6 +233,23 @@ export default function CityReport() {
           <div className="text-2xl font-semibold">
             {formatCHF(totalVolume)}
           </div>
+        </div>
+      </section>
+
+      <section className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="rounded-lg border p-4">
+          <div className="text-sm text-gray-500">Km a velo (mois)</div>
+          <div className="text-2xl font-semibold">
+            {ecoLoading || !ecoStats ? '-' : ecoStats.distance_km.toFixed(1)}
+          </div>
+          <div className="text-xs text-gray-400">Estimation aller-retour</div>
+        </div>
+        <div className="rounded-lg border p-4">
+          <div className="text-sm text-gray-500">CO2 economise (kg)</div>
+          <div className="text-2xl font-semibold">
+            {ecoLoading || !ecoStats ? '-' : ecoStats.co2_saved_kg.toFixed(1)}
+          </div>
+          <div className="text-xs text-gray-400">Base voiture 93.6 g/km</div>
         </div>
       </section>
 

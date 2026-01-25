@@ -1,13 +1,19 @@
 'use client'
 
-import { Suspense } from 'react'
-import CityReport from './components/CityReport'
-import HqReport from './components/HqReport'
-import ShopReport from './components/ShopReport'
+import { Suspense, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { useMe } from '../hooks/useMe'
 
 function ReportsContent() {
+  const router = useRouter()
   const { data, loading, error } = useMe()
+  const role = data?.role
+
+  useEffect(() => {
+    if (role && ['city', 'hq', 'shop'].includes(role)) {
+      router.replace('/dashboard')
+    }
+  }, [role, router])
 
   if (loading) {
     return (
@@ -29,16 +35,8 @@ function ReportsContent() {
     )
   }
 
-  if (data.role === 'city') {
-    return <CityReport />
-  }
-
-  if (data.role === 'hq') {
-    return <HqReport />
-  }
-
-  if (data.role === 'shop') {
-    return <ShopReport />
+  if (['city', 'hq', 'shop'].includes(data.role)) {
+    return <div className="p-8 text-sm text-gray-600">Redirection...</div>
   }
 
   if (

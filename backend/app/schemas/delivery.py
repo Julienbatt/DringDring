@@ -32,3 +32,16 @@ class ShopDeliveryCreate(BaseModel):
     time_window: str
     bags: int = Field(ge=1, le=20)
     order_amount: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class ShopDeliveryUpdate(BaseModel):
+    delivery_date: Optional[date] = None
+    time_window: Optional[str] = None
+    bags: Optional[int] = Field(default=None, ge=1, le=20)
+    order_amount: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class ShopDeliveryCancel(BaseModel):
+    reason: Optional[str] = None

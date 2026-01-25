@@ -15,7 +15,12 @@ export function exportToCsv(
         .map((col) => {
           const value = row[col]
           if (value === null || value === undefined) return ''
-          return `"${String(value).replace(/"/g, '""')}"`
+          let strValue = String(value)
+          // Security: Prevent CSV formula injection (Excel/Sheets)
+          if (/^[=+\-@]/.test(strValue)) {
+            strValue = "'" + strValue
+          }
+          return `"${strValue.replace(/"/g, '""')}"`
         })
         .join(';')
     ),

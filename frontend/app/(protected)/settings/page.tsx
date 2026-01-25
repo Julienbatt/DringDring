@@ -1,16 +1,62 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type FormEvent } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useMe } from '../hooks/useMe'
 import { toast } from 'sonner'
+import { roleLabel } from '@/lib/roleLabel'
+import { apiGet, apiPost } from '@/lib/api'
 
 export default function SettingsPage() {
+    const router = useRouter()
     const { data: user, loading } = useMe()
     const [newPassword, setNewPassword] = useState('')
     const [updating, setUpdating] = useState(false)
+    const [vatRatePercent, setVatRatePercent] = useState('8.1')
+    const [vatMonth, setVatMonth] = useState(() => new Date().toISOString().slice(0, 7))
+    const [vatEffectiveFrom, setVatEffectiveFrom] = useState<string | null>(null)
+    const [vatLoading, setVatLoading] = useState(false)
+    const [vatSaving, setVatSaving] = useState(false)
 
-    const handlePasswordUpdate = async (e: React.FormEvent) => {
+    useEffect(() => {
+        if (user?.role === 'customer') {
+            router.replace('/customer/profile')
+        }
+    }, [user, router])
+
+    useEffect(() => {
+        if (user?.role !== 'super_admin') return
+        let isActive = true
+        const loadVatRate = async () => {
+            setVatLoading(true)
+            try {
+                const supabase = createClient()
+                const { data: { session } } = await supabase.auth.getSession()
+                if (!session?.access_token) return
+                const data = await apiGet<{ rate: number; effective_from: string }>(
+                    `/settings/vat-rate?month=${vatMonth}`,
+                    session.access_token
+                )
+                if (!isActive) return
+                const percent = (data.rate * 100).toFixed(1).replace(/\.0$/, '')
+                setVatRatePercent(percent)
+                setVatEffectiveFrom(data.effective_from)
+            } catch (error: any) {
+                toast.error(`Erreur TVA: ${error.message}`)
+            } finally {
+                if (isActive) {
+                    setVatLoading(false)
+                }
+            }
+        }
+        loadVatRate()
+        return () => {
+            isActive = false
+        }
+    }, [user?.role, vatMonth])
+
+    const handlePasswordUpdate = async (e: FormEvent) => {
         e.preventDefault()
         if (!newPassword) return
 
@@ -19,12 +65,12 @@ export default function SettingsPage() {
 
         try {
             const { error } = await supabase.auth.updateUser({
-                password: newPassword
+                password: newPassword,
             })
 
             if (error) throw error
 
-            toast.success('Mot de passe mis à jour avec succès')
+            toast.success('Mot de passe mis a jour avec succes')
             setNewPassword('')
         } catch (error: any) {
             toast.error(`Erreur: ${error.message}`)
@@ -39,91 +85,183 @@ export default function SettingsPage() {
         window.location.href = '/login'
     }
 
+    const handleVatUpdate = async (e: FormEvent) => {
+        e.preventDefault()
+        const parsedPercent = Number(vatRatePercent.replace(',', '.'))
+        if (!Number.isFinite(parsedPercent) || parsedPercent <= 0 || parsedPercent >= 100) {
+            toast.error('Valeur TVA invalide')
+            return
+        }
+
+        setVatSaving(true)
+        const supabase = createClient()
+
+        try {
+            const { data: { session } } = await supabase.auth.getSession()
+            if (!session?.access_token) {
+                toast.error('Session invalide')
+                return
+            }
+            const rate = parsedPercent / 100
+            const response = await apiPost<{ rate: number; effective_from: string }>(
+                '/settings/vat-rate',
+                { rate, effective_from: vatMonth },
+                session.access_token
+            )
+            setVatEffectiveFrom(response.effective_from)
+            toast.success('TVA mise a jour')
+        } catch (error: any) {
+            toast.error(`Erreur TVA: ${error.message}`)
+        } finally {
+            setVatSaving(false)
+        }
+    }
+
     if (loading) {
         return <div className="p-8">Chargement du profil...</div>
     }
 
     if (!user) {
-        return <div className="p-8">Utilisateur non trouvé</div>
+        return <div className="p-8">Utilisateur non trouve</div>
     }
 
     return (
-        <div className="p-8 max-w-2xl mx-auto space-y-8">
-            <header>
-                <h1 className="text-2xl font-bold text-gray-900">Paramètres du compte</h1>
-                <p className="text-gray-500">Gérez vos informations personnelles et votre sécurité.</p>
-            </header>
+        <div className="min-h-screen bg-slate-50">
+            <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 pb-16 pt-6 md:px-8">
+                <header className="space-y-2">
+                    <h1 className="text-2xl font-semibold text-slate-900 md:text-3xl">Parametres du compte</h1>
+                    <p className="text-sm text-slate-600 md:text-base">Gerez vos informations et la securite du compte.</p>
+                </header>
 
-            <section className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm space-y-4">
-                <h2 className="text-lg font-semibold text-gray-800 border-b pb-2">Profil</h2>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label className="block text-sm font-medium text-gray-500">Email</label>
-                        <div className="text-gray-900 font-medium">{user.email}</div>
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-gray-500">Rôle</label>
-                        <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 capitalize">
-                            {user.role}
+                <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+                    <h2 className="text-base font-semibold text-slate-900">Profil</h2>
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                        <div>
+                            <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Email</label>
+                            <div className="mt-1 text-sm font-medium text-slate-900">{user.email}</div>
                         </div>
-                    </div>
-                    {user.shop_id && (
-                        <div className="md:col-span-2">
-                            <label className="block text-sm font-medium text-gray-500">ID Boutique</label>
-                            <div className="text-gray-700 text-sm font-mono bg-gray-50 p-2 rounded">{user.shop_id}</div>
+                        <div>
+                            <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Role</label>
+                            <div className="mt-1 inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                                {roleLabel(user.role)}
+                            </div>
                         </div>
-                    )}
-                    {user.city_id && (
-                        <div className="md:col-span-2">
-                            <label className="block text-sm font-medium text-gray-500">ID Ville</label>
-                            <div className="text-gray-700 text-sm font-mono bg-gray-50 p-2 rounded">{user.city_id}</div>
+                        {user.shop_id && (
+                            <div className="md:col-span-2">
+                                <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">ID Boutique</label>
+                                <div className="mt-1 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs font-mono text-slate-600">
+                                    {user.shop_id}
+                                </div>
+                            </div>
+                        )}
+                        {user.city_id && (
+                            <div className="md:col-span-2">
+                                <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">ID Commune</label>
+                                <div className="mt-1 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs font-mono text-slate-600">
+                                    {user.city_id}
+                                </div>
+                            </div>
+                        )}
+                        {user.hq_id && (
+                            <div className="md:col-span-2">
+                                <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">ID HQ</label>
+                                <div className="mt-1 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs font-mono text-slate-600">
+                                    {user.hq_id}</div>
+                            </div>
+                        )}
+                        {user.admin_region_id && (
+                            <div className="md:col-span-2">
+                                <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">ID Region</label>
+                                <div className="mt-1 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs font-mono text-slate-600">
+                                    {user.admin_region_id}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </section>
+
+                {user.role === 'super_admin' && (
+                    <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+                        <h2 className="text-base font-semibold text-slate-900">Parametres TVA</h2>
+                        <p className="mt-2 text-sm text-slate-600">
+                            La TVA est appliquee aux factures PDF. Vous pouvez planifier une nouvelle valeur par mois.
+                        </p>
+                        <form onSubmit={handleVatUpdate} className="mt-4 grid gap-4 md:grid-cols-2">
+                            <div>
+                                <label className="text-sm font-medium text-slate-600">Taux TVA (%)</label>
+                                <input
+                                    type="text"
+                                    value={vatRatePercent}
+                                    onChange={(e) => setVatRatePercent(e.target.value)}
+                                    placeholder="8.1"
+                                    className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                                />
+                                <p className="mt-1 text-xs text-slate-400">
+                                    Actif depuis: {vatEffectiveFrom || vatMonth}
+                                </p>
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium text-slate-600">Mois d&apos;effet</label>
+                                <input
+                                    type="month"
+                                    value={vatMonth}
+                                    onChange={(e) => setVatMonth(e.target.value)}
+                                    className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                                />
+                                <p className="mt-1 text-xs text-slate-400">
+                                    {vatLoading ? 'Chargement...' : 'Selectionnez un mois pour previsualiser le taux.'}
+                                </p>
+                            </div>
+                            <div className="md:col-span-2 flex justify-end">
+                                <button
+                                    type="submit"
+                                    disabled={vatSaving || vatLoading}
+                                    className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-50"
+                                >
+                                    {vatSaving ? 'Mise a jour...' : 'Mettre a jour la TVA'}
+                                </button>
+                            </div>
+                        </form>
+                    </section>
+                )}
+
+                <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+                    <h2 className="text-base font-semibold text-slate-900">Securite</h2>
+                    <form onSubmit={handlePasswordUpdate} className="mt-4 space-y-4">
+                        <div>
+                            <label htmlFor="new-password" className="text-sm font-medium text-slate-600">Nouveau mot de passe</label>
+                            <input
+                                id="new-password"
+                                type="password"
+                                value={newPassword}
+                                onChange={(e) => setNewPassword(e.target.value)}
+                                placeholder="******"
+                                minLength={6}
+                                className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                            />
+                            <p className="mt-1 text-xs text-slate-400">Minimum 6 caracteres.</p>
                         </div>
-                    )}
-                </div>
-            </section>
+                        <div className="flex justify-end">
+                            <button
+                                type="submit"
+                                disabled={!newPassword || updating}
+                                className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-50"
+                            >
+                                {updating ? 'Mise a jour...' : 'Mettre a jour'}
+                            </button>
+                        </div>
+                    </form>
+                </section>
 
-            <section className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm space-y-4">
-                <h2 className="text-lg font-semibold text-gray-800 border-b pb-2">Sécurité</h2>
-
-                <form onSubmit={handlePasswordUpdate} className="space-y-4">
-                    <div>
-                        <label htmlFor="new-password" className="block text-sm font-medium text-gray-700">Nouveau mot de passe</label>
-                        <input
-                            id="new-password"
-                            type="password"
-                            value={newPassword}
-                            onChange={(e) => setNewPassword(e.target.value)}
-                            placeholder="••••••••"
-                            minLength={6}
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border"
-                        />
-                        <p className="mt-1 text-xs text-gray-500">Minimum 6 caractères.</p>
-                    </div>
-
-                    <div className="flex justify-end">
-                        <button
-                            type="submit"
-                            disabled={!newPassword || updating}
-                            className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 transition-colors text-sm font-medium"
-                        >
-                            {updating ? 'Mise à jour...' : 'Mettre à jour le mot de passe'}
-                        </button>
-                    </div>
-                </form>
-            </section>
-
-            <section className="pt-8 border-t">
-                <button
-                    onClick={handleLogout}
-                    className="text-red-600 hover:text-red-800 font-medium text-sm flex items-center gap-2"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
-                    </svg>
-                    Se déconnecter
-                </button>
-            </section>
+                <section className="pt-4">
+                    <button
+                        onClick={handleLogout}
+                        className="text-sm font-semibold text-red-600 transition hover:text-red-700"
+                    >
+                        Se deconnecter
+                    </button>
+                </section>
+            </div>
         </div>
     )
 }

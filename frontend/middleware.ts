@@ -27,12 +27,14 @@ export async function middleware(req: NextRequest) {
     data: { session },
   } = await supabase.auth.getSession()
 
-  const isProtected =
-    req.nextUrl.pathname.startsWith('/dashboard') ||
-    req.nextUrl.pathname.startsWith('/hq') ||
-    req.nextUrl.pathname.startsWith('/reports')
+  /*
+   * Public Paths Whitelist
+   * Add any new public route here.
+   */
+  const publicPaths = ['/', '/login', '/register', '/forgot-password', '/auth/callback']
+  const isPublic = publicPaths.includes(req.nextUrl.pathname) || req.nextUrl.pathname.startsWith('/api/public')
 
-  if (isProtected && !session) {
+  if (!isPublic && !session) {
     const loginUrl = req.nextUrl.clone()
     loginUrl.pathname = '/'
     return NextResponse.redirect(loginUrl)
@@ -42,5 +44,15 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/hq/:path*', '/reports/:path*'],
+  /*
+   * Match all request paths except:
+   * - _next/static (static files)
+   * - _next/image (image optimization files)
+   * - favicon.ico (favicon file)
+   * - public folder
+   * - api/auth (if handled by supabase auth helpers widely)
+   */
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+  ],
 }

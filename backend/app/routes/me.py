@@ -37,7 +37,7 @@ def get_my_cities(
         with conn.cursor() as cur:
             if identity.role == "admin_region" and identity.admin_region_id:
                 cur.execute(
-                    "SELECT id, name, postal_code FROM city WHERE admin_region_id = %s ORDER BY name",
+                    "SELECT id, name FROM city WHERE admin_region_id = %s ORDER BY name",
                     (identity.admin_region_id,)
                 )
                 columns = [desc[0] for desc in cur.description]
@@ -50,8 +50,19 @@ def get_my_cities(
                     
             elif identity.role == "city" and identity.city_id:
                  cur.execute(
-                    "SELECT id, name, postal_code FROM city WHERE id = %s",
+                    "SELECT id, name FROM city WHERE id = %s",
                     (identity.city_id,)
+                )
+                 columns = [desc[0] for desc in cur.description]
+                 rows = cur.fetchall()
+                 for row in rows:
+                    item = {}
+                    for col, val in zip(columns, row):
+                        item[col] = val
+                    cities.append(item)
+            elif identity.role == "super_admin":
+                 cur.execute(
+                    "SELECT id, name FROM city ORDER BY name",
                 )
                  columns = [desc[0] for desc in cur.description]
                  rows = cur.fetchall()

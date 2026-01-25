@@ -19,7 +19,7 @@ def get_connection():
     
     # Simple parsing logic similar to session.py but simplified for script
     # Assuming valid connection string for dev
-    return psycopg.connect(settings.DATABASE_URL, autocommit=True)
+    return psycopg.connect(settings.DATABASE_URL, autocommit=True, prepare_threshold=None)
 
 def cleanup_data(cur):
     print("Cleaning up old data...")
@@ -31,6 +31,7 @@ def cleanup_data(cur):
         "public.delivery",
         "public.client",
         "public.shop",
+        "public.tariff_grid",
         "public.tariff_version",
         "public.tariff",
         "public.hq",
@@ -39,37 +40,10 @@ def cleanup_data(cur):
         "public.canton",
     ]
     for table in tables:
-        cur.execute(f"TRUNCATE TABLE {table} CASCADE;")
-    
-    # Clean auth users (Careful with this in prod!)
-    # We delete users that match our test domain to avoid wiping real admins if any
-    cur.execute("DELETE FROM auth.users WHERE email LIKE '%@dringdring.ch';")
-
-def create_auth_user(cur, email, password="password", user_id=None):
-    if not user_id:
-        user_id = str(uuid.uuid4())
-    
-    print(f"Creating auth user: {email}")
-    cur.execute(
-        """
-        INSERT INTO auth.users (id, instance_id, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, aud, role)
-        VALUES (
-            %s, 
-            '00000000-0000-0000-0000-000000000000', 
-            %s, 
-            crypt(%s, gen_salt('bf')), 
-            now(), 
-            '{"provider":"email","providers":["email"]}', 
-            '{}', 
-            'authenticated', 
-            'authenticated'
-        )
-        RETURNING id;
-        """,
-        (user_id, email, password)
-    )
-    row = cur.fetchone()
-    return row[0] if row else None
+        cur.execute("SELECT to_regclass(%s)", (table,))
+        if cur.fetchone()[0]:
+            cur.execute(f"TRUNCATE TABLE {table} CASCADE;")
+    # Auth users are managed via reset_test_users.py to avoid direct writes to auth schema.
 
 def seed_geo(cur):
     print("Seeding Geography...")
@@ -87,20 +61,20 @@ def seed_geo(cur):
         "velocite_vs": str(uuid.uuid4()),
         "velocite_riviera": str(uuid.uuid4())
     }
-    cur.execute("INSERT INTO admin_region (id, canton_id, name, active) VALUES (%s, %s, 'Vélocité Valais', true)", (admins["velocite_vs"], cantons["VS"]))
-    cur.execute("INSERT INTO admin_region (id, canton_id, name, active) VALUES (%s, %s, 'Vélocité Riviera', true)", (admins["velocite_riviera"], cantons["VD"]))
+    cur.execute("INSERT INTO admin_region (id, canton_id, name, active) VALUES (%s, %s, 'Velocite Valais', true)", (admins["velocite_vs"], cantons["VS"]))
+    cur.execute("INSERT INTO admin_region (id, canton_id, name, active) VALUES (%s, %s, 'Velocite Riviera', true)", (admins["velocite_riviera"], cantons["VD"]))
 
     # Cities
     cities = {
         "sion": str(uuid.uuid4()),
         "vevey": str(uuid.uuid4())
     }
-    # Sion -> Vélocité Valais
+    # Sion -> Velocite Valais
     cur.execute(
         "INSERT INTO city (id, canton_id, admin_region_id, name) VALUES (%s, %s, %s, 'Sion')", 
         (cities["sion"], cantons["VS"], admins["velocite_vs"])
     )
-    # Vevey -> Vélocité Riviera
+    # Vevey -> Velocite Riviera
     cur.execute(
         "INSERT INTO city (id, canton_id, admin_region_id, name) VALUES (%s, %s, %s, 'Vevey')", 
         (cities["vevey"], cantons["VD"], admins["velocite_riviera"])
@@ -110,7 +84,7 @@ def seed_geo(cur):
 
 def seed_business_entities(cur, cities):
     print("Seeding Business Entities...")
-    
+
     # HQs
     hqs = {
         "migros": str(uuid.uuid4()),
@@ -119,96 +93,64 @@ def seed_business_entities(cur, cities):
     }
     cur.execute("INSERT INTO hq (id, name) VALUES (%s, 'Migros Valais')", (hqs["migros"],))
     cur.execute("INSERT INTO hq (id, name) VALUES (%s, 'Coop Suisse')", (hqs["coop"],))
-    cur.execute("INSERT INTO hq (id, name) VALUES (%s, 'Indépendants')", (hqs["independents"],))
-    
-    # Tariff
-    tariff_parent_id = str(uuid.uuid4())
+    cur.execute("INSERT INTO hq (id, name) VALUES (%s, 'Independants')", (hqs["independents"],))
+
+    # Tariff Grid
+    cur.execute("SELECT admin_region_id FROM city WHERE id = %s", (cities["sion"],))
+    admin_region_id = cur.fetchone()[0]
+    tariff_grid_id = str(uuid.uuid4())
     cur.execute(
-        "INSERT INTO tariff (id, name, scope, scope_id, active) VALUES (%s, 'Tarif Sion Standard', 'city', %s, true)",
-        (tariff_parent_id, cities["sion"])
+        "INSERT INTO tariff_grid (id, name, admin_region_id, active) VALUES (%s, 'Tarif Sion Standard', %s, true)",
+        (tariff_grid_id, admin_region_id)
     )
 
     # Tariff Versions
-    tariff_id = str(uuid.uuid4())
+    tariff_version_id = str(uuid.uuid4())
     rule = '{"pricing": {"price_per_2_bags": 15.0, "cms_discount": 5.0}}'
     share = '{"client": 33.33, "shop": 33.33, "city": 33.34}'
-    
+
     cur.execute(
         """
-        INSERT INTO tariff_version (id, tariff_id, rule_type, rule, share, valid_from)
+        INSERT INTO tariff_version (id, tariff_grid_id, rule_type, rule, share, valid_from)
         VALUES (%s, %s, 'bags', %s, %s, '2024-01-01')
         """,
-        (tariff_id, tariff_parent_id, rule, share)
+        (tariff_version_id, tariff_grid_id, rule, share)
     )
-    
+
     # Shops
     shops = {
         "migros_metropole": str(uuid.uuid4()),
         "migros_midi": str(uuid.uuid4()),
         "coop_vevey": str(uuid.uuid4()),
-        "pizzeria_mario": str(uuid.uuid4()) # Indépendant
+        "pizzeria_mario": str(uuid.uuid4())  # Independent
     }
-    
-    # Migros Métropole (Sion)
+
+    # Migros Metropole (Sion)
     cur.execute(
-        "INSERT INTO shop (id, hq_id, city_id, tariff_version_id, name) VALUES (%s, %s, %s, %s, 'Migros Métropole')",
-        (shops["migros_metropole"], hqs["migros"], cities["sion"], tariff_id)
+        "INSERT INTO shop (id, hq_id, city_id, tariff_version_id, name) VALUES (%s, %s, %s, %s, 'Migros Metropole')",
+        (shops["migros_metropole"], hqs["migros"], cities["sion"], tariff_version_id)
     )
-    
+
     # Migros Midi (Sion)
     cur.execute(
         "INSERT INTO shop (id, hq_id, city_id, tariff_version_id, name) VALUES (%s, %s, %s, %s, 'Migros Midi')",
-        (shops["migros_midi"], hqs["migros"], cities["sion"], tariff_id)
+        (shops["migros_midi"], hqs["migros"], cities["sion"], tariff_version_id)
     )
-    
+
     # Coop Vevey (Vevey)
     cur.execute(
         "INSERT INTO shop (id, hq_id, city_id, tariff_version_id, name) VALUES (%s, %s, %s, %s, 'Coop Vevey')",
-        (shops["coop_vevey"], hqs["coop"], cities["vevey"], tariff_id)
+        (shops["coop_vevey"], hqs["coop"], cities["vevey"], tariff_version_id)
     )
-    
+
     # Pizzeria Mario (Sion, Independent/No HQ)
     cur.execute(
         "INSERT INTO shop (id, hq_id, city_id, tariff_version_id, name) VALUES (%s, %s, %s, %s, 'Chez Mario')",
-        (shops["pizzeria_mario"], hqs["independents"], cities["sion"], tariff_id)
+        (shops["pizzeria_mario"], hqs["independents"], cities["sion"], tariff_version_id)
     )
-    
-    return hqs, shops, tariff_id
 
-def seed_users(cur, cities, admins, hqs, shops):
-    print("Seeding Users & Profiles...")
-    
-    # Super Admin
-    uid = create_auth_user(cur, "superadmin@dringdring.ch")
-    cur.execute("INSERT INTO public.profiles (id, role) VALUES (%s, 'super_admin')", (uid,))
-    
-    # Admin Region (Valais)
-    uid = create_auth_user(cur, "admin_vs@dringdring.ch")
-    cur.execute("INSERT INTO public.profiles (id, role, admin_region_id) VALUES (%s, 'admin_region', %s)", (uid, admins["velocite_vs"]))
-    
-    # City User (Sion)
-    uid = create_auth_user(cur, "sion@dringdring.ch")
-    cur.execute("INSERT INTO public.profiles (id, role, city_id) VALUES (%s, 'city', %s)", (uid, cities["sion"]))
-    
-    # HQ User (Migros)
-    uid = create_auth_user(cur, "migros@dringdring.ch")
-    cur.execute("INSERT INTO public.profiles (id, role, hq_id) VALUES (%s, 'hq', %s)", (uid, hqs["migros"]))
-    
-    # Shop User (Migros Métropole)
-    uid = create_auth_user(cur, "shop_metropole@dringdring.ch")
-    cur.execute("INSERT INTO public.profiles (id, role, shop_id, hq_id) VALUES (%s, 'shop', %s, %s)", (uid, shops["migros_metropole"], hqs["migros"]))
-    
-    # Shop User (Pizzeria Mario)
-    uid = create_auth_user(cur, "shop_mario@dringdring.ch")
-    cur.execute("INSERT INTO public.profiles (id, role, shop_id) VALUES (%s, 'shop', %s)", (uid, shops["pizzeria_mario"]))
+    return hqs, shops, tariff_version_id
 
-    # Courier User
-    uid = create_auth_user(cur, "coursier@dringdring.ch")
-    cur.execute("INSERT INTO public.profiles (id, role) VALUES (%s, 'courier')", (uid,))
-
-    # Final Customer User
-    uid = create_auth_user(cur, "client@dringdring.ch")
-    cur.execute("INSERT INTO public.profiles (id, role) VALUES (%s, 'customer')", (uid,))
 
 def seed_clients(cur, cities):
     print("Seeding Clients (Recipients)...")
@@ -344,10 +286,9 @@ def main():
                 
                 cleanup_data(cur)
                 cantons, cities, admins = seed_geo(cur)
-                hqs, shops, tariff_id = seed_business_entities(cur, cities)
+                hqs, shops, tariff_version_id = seed_business_entities(cur, cities)
                 clients = seed_clients(cur, cities)
-                seed_users(cur, cities, admins, hqs, shops)
-                seed_deliveries(cur, hqs, shops, clients, tariff_id)
+                seed_deliveries(cur, hqs, shops, clients, tariff_version_id)
                 
         print("Seeding completed successfully!")
         
@@ -362,3 +303,6 @@ if __name__ == "__main__":
     import uuid
     import psycopg
     main()
+
+
+

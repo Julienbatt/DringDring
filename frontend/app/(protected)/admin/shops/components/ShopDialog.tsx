@@ -1,0 +1,344 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
+import AddressAutocomplete from '@/components/AddressAutocomplete'
+import { apiDelete, apiGet, apiPost, apiPut } from '@/lib/api'
+import { useAuth } from '@/app/(protected)/providers/AuthProvider'
+import { toast } from 'sonner'
+
+export type ShopData = {
+  id?: string
+  name: string
+  city_id: string
+  hq_id?: string | null
+  tariff_version_id?: string | null
+  address?: string | null
+  lat?: number | null
+  lng?: number | null
+  contact_person?: string | null
+  email?: string | null
+  phone?: string | null
+}
+
+type ShopDialogProps = {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  shopToEdit?: ShopData | null
+  onSuccess: () => void
+}
+
+type ReferenceData = {
+  cities: { id: string; name: string }[]
+  hqs: { id: string; name: string }[]
+  tariffs: { id: string; name: string }[]
+}
+
+export function ShopDialog({ open, onOpenChange, shopToEdit, onSuccess }: ShopDialogProps) {
+  const { session, adminContextRegion } = useAuth()
+  const [loading, setLoading] = useState(false)
+  const [refData, setRefData] = useState<ReferenceData>({ cities: [], hqs: [], tariffs: [] })
+
+  const [formData, setFormData] = useState<ShopData>({
+    name: '',
+    city_id: '',
+    hq_id: 'none',
+    tariff_version_id: 'none',
+    address: '',
+    lat: null,
+    lng: null,
+    contact_person: '',
+    email: '',
+    phone: '',
+  })
+
+  useEffect(() => {
+    if (open && session?.access_token) {
+      fetchReferences()
+    }
+  }, [open, session, adminContextRegion])
+
+  useEffect(() => {
+    if (shopToEdit) {
+      setFormData({
+        ...shopToEdit,
+        hq_id: shopToEdit.hq_id || 'none',
+        tariff_version_id: shopToEdit.tariff_version_id || 'none',
+        address: shopToEdit.address || '',
+        lat: shopToEdit.lat ?? null,
+        lng: shopToEdit.lng ?? null,
+        contact_person: shopToEdit.contact_person || '',
+        email: shopToEdit.email || '',
+        phone: shopToEdit.phone || '',
+      })
+    } else {
+      setFormData({
+        name: '',
+        city_id: '',
+        hq_id: 'none',
+        tariff_version_id: 'none',
+        address: '',
+        lat: null,
+        lng: null,
+        contact_person: '',
+        email: '',
+        phone: '',
+      })
+    }
+  }, [shopToEdit, open])
+
+  const fetchReferences = async () => {
+    if (!session?.access_token) return
+    try {
+      const queryParams = adminContextRegion ? `?admin_region_id=${adminContextRegion.id}` : ''
+      const [cities, hqs, tariffs] = await Promise.all([
+        apiGet<any[]>(`/cities${queryParams}`, session.access_token),
+        apiGet<any[]>(`/shops/hqs${queryParams}`, session.access_token),
+        apiGet<any[]>(`/shops/tariffs${queryParams}`, session.access_token),
+      ])
+      setRefData({ cities, hqs, tariffs })
+    } catch (error) {
+      console.error('Error loading references', error)
+      toast.error('Erreur de chargement des listes')
+    }
+  }
+
+  const formatAddress = (address: { street: string; number: string; zip: string; city: string }) => {
+    const line1 = [address.street, address.number].filter(Boolean).join(' ').trim()
+    const line2 = [address.zip, address.city].filter(Boolean).join(' ').trim()
+    return [line1, line2].filter(Boolean).join(', ')
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!session?.access_token) return
+
+    if (!formData.city_id) {
+      toast.error('La commune partenaire est obligatoire')
+      return
+    }
+    if (!formData.tariff_version_id || formData.tariff_version_id === 'none') {
+      toast.error('La grille tarifaire est obligatoire')
+      return
+    }
+
+    setLoading(true)
+    try {
+      const payload = {
+        ...formData,
+        hq_id: formData.hq_id === 'none' ? null : formData.hq_id,
+        tariff_version_id: formData.tariff_version_id === 'none' ? null : formData.tariff_version_id,
+      }
+
+      if (shopToEdit?.id) {
+        await apiPut(`/shops/${shopToEdit.id}`, payload, session.access_token)
+        toast.success('Commerce mis a jour')
+      } else {
+        const res = await apiPost<{
+          user_created?: boolean
+          user_error?: string | null
+          user_email?: string | null
+        }>('/shops', payload, session.access_token)
+        toast.success('Commerce cree')
+        if (res?.user_created) {
+          toast.info('Compte commerce cree (mot de passe initial: password).')
+        } else if (res?.user_error) {
+          toast.error(`Compte commerce non cree: ${res.user_error}`)
+        }
+      }
+      onSuccess()
+      onOpenChange(false)
+    } catch (error: any) {
+      console.error(error)
+      toast.error(error.message || 'Une erreur est survenue')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!session?.access_token || !shopToEdit?.id) return
+    if (!confirm('Supprimer ce commerce ?')) return
+    setLoading(true)
+    try {
+      await apiDelete(`/shops/${shopToEdit.id}`, session.access_token)
+      toast.success('Commerce supprime')
+      onSuccess()
+      onOpenChange(false)
+    } catch (error: any) {
+      console.error(error)
+      toast.error(error.message || 'Erreur lors de la suppression')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const isEditing = !!shopToEdit?.id
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{isEditing ? 'Modifier le commerce' : 'Nouveau commerce'}</DialogTitle>
+          <DialogDescription>
+            Remplissez les informations ci-dessous. Tous les champs marques * sont requis.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-4 py-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="name">Nom du commerce *</Label>
+              <Input
+                id="name"
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                required
+                placeholder="Ex: Velocite Sion"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="city">Commune partenaire *</Label>
+              <Select value={formData.city_id} onValueChange={(v) => setFormData({ ...formData, city_id: v })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selectionner une commune partenaire..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {refData.cities.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 bg-gray-50 p-3 rounded-md">
+            <div className="space-y-2">
+              <Label htmlFor="hq">Rattache a un HQ</Label>
+              <Select value={formData.hq_id || 'none'} onValueChange={(v) => setFormData({ ...formData, hq_id: v })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Aucun" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">-- Aucun --</SelectItem>
+                  {refData.hqs.map((h) => (
+                    <SelectItem key={h.id} value={h.id}>
+                      {h.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="tariff">Grille tarifaire *</Label>
+              <Select
+                value={formData.tariff_version_id || 'none'}
+                onValueChange={(v) => setFormData({ ...formData, tariff_version_id: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Choisir..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">-- A definir --</SelectItem>
+                  {refData.tariffs.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>
+                      {t.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="address">Adresse physique</Label>
+            <AddressAutocomplete
+              onSelect={(address) => {
+                setFormData({
+                  ...formData,
+                  address: formatAddress(address),
+                  lat: address.lat ?? null,
+                  lng: address.lng ?? null,
+                })
+              }}
+            />
+            <Textarea
+              id="address"
+              value={formData.address || ''}
+              onChange={(e) =>
+                setFormData({
+                  ...formData,
+                  address: e.target.value,
+                  lat: null,
+                  lng: null,
+                })
+              }
+              placeholder="Rue, NPA, Localite..."
+              rows={2}
+            />
+          </div>
+
+          <div className="grid grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="person">Personne contact</Label>
+              <Input
+                id="person"
+                value={formData.contact_person || ''}
+                onChange={(e) => setFormData({ ...formData, contact_person: e.target.value })}
+                placeholder="Prenom Nom"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                value={formData.email || ''}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                placeholder="contact@shop.ch"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="phone">Telephone</Label>
+              <Input
+                id="phone"
+                type="tel"
+                value={formData.phone || ''}
+                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                placeholder="+41 79..."
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="pt-4">
+            {isEditing && (
+              <Button type="button" variant="destructive" onClick={handleDelete} disabled={loading}>
+                Supprimer
+              </Button>
+            )}
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Annuler
+            </Button>
+            <Button type="submit" disabled={loading}>
+              {loading ? 'Enregistrement...' : isEditing ? 'Mettre a jour' : 'Creer le commerce'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}

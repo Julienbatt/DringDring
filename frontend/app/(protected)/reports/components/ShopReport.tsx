@@ -1,13 +1,16 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import ClientAutocomplete from '@/components/ClientAutocomplete'
+import AddressAutocomplete from '@/components/AddressAutocomplete'
 import { createClient } from '@/lib/supabase/client'
-import { apiPost, apiGet } from '@/lib/api'
+import { apiPost, apiGet, apiPatch, API_BASE_URL } from '@/lib/api'
 import { useShopClients } from '../hooks/useShopClients'
 import { useShopDeliveries } from '../hooks/useShopDeliveries'
 import { useShopPeriods } from '../hooks/useShopPeriods'
+import { useShopStats } from '../hooks/useShopStats'
 
 function getCurrentMonth() {
   const now = new Date()
@@ -36,10 +39,31 @@ function formatDate(value: unknown) {
   return asText.slice(0, 10)
 }
 
+function formatPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) return 'n/a'
+  const sign = value > 0 ? '+' : ''
+  return `${sign}${value.toFixed(1)}%`
+}
+function formatClientAddress(client: {
+  address?: string | null
+  postal_code?: string | null
+  city_name?: string | null
+}) {
+  const address = String(client.address ?? '').trim()
+  const postal = String(client.postal_code ?? '').trim()
+  const city = String(client.city_name ?? '').trim()
+  const normalized = address.toLowerCase()
+  const hasPostal = postal && normalized.includes(postal.toLowerCase())
+  const hasCity = city && normalized.includes(city.toLowerCase())
+  const parts = [address]
+  if (postal && !hasPostal) parts.push(postal)
+  if (city && !hasCity) parts.push(city)
+  return parts.filter(Boolean).join(' ')
+}
+
 type PreviewResult = {
   total_price: string
   share_client: string
-  share_shop: string
   share_city: string
   share_admin_region?: string
 }
@@ -61,18 +85,32 @@ const TABLE_COLUMNS = [
   'bags',
   'status',
   'total_price',
-  'share_shop',
+  'share_admin_region',
 ]
 
 const TABLE_LABELS: Record<string, string> = {
   delivery_date: 'Date',
   client_name: 'Client',
   address: 'Adresse',
-  city_name: 'Ville',
+    city_name: 'Commune partenaire',
   bags: 'Sacs',
   status: 'Statut',
   total_price: 'Total CHF',
-  share_shop: 'Part shop',
+  share_admin_region: 'Part entreprise regionale',
+}
+
+const EDITABLE_STATUSES = new Set(['created', 'assigned'])
+
+function formatStatus(value: unknown) {
+  const raw = String(value ?? '').toLowerCase()
+  if (!raw) return '-'
+  if (raw === 'created') return 'Creee'
+  if (raw === 'assigned') return 'Assignee'
+  if (raw === 'picked_up') return 'En cours'
+  if (raw === 'delivered') return 'Livree'
+  if (raw === 'issue') return 'Incident'
+  if (raw === 'cancelled') return 'Annulee'
+  return raw
 }
 
 type FormState = {
@@ -81,17 +119,14 @@ type FormState = {
   time_window: string
   bags: string | number
   order_amount: string | number
+  notes: string
   [key: string]: any
 }
 
 export default function ShopReport() {
+  const [selectedMonth] = useState(getCurrentMonth())
   const router = useRouter()
-  const pathname = usePathname()
   const searchParams = useSearchParams()
-  const paramMonth = searchParams.get('month')
-  const [selectedMonth, setSelectedMonth] = useState(
-    paramMonth ?? getCurrentMonth()
-  )
 
   const [formState, setFormState] = useState<FormState>({
     client_id: '',
@@ -99,12 +134,94 @@ export default function ShopReport() {
     time_window: '',
     bags: '',
     order_amount: '',
+    notes: '',
   })
+  const [isCreatingClient, setIsCreatingClient] = useState(false)
+  const [newClient, setNewClient] = useState({
+    name: '', address: '', postal_code: '', city_id: '', floor: '', door_code: '',
+    phone: '',
+    is_cms: false
+  })
+  const [newClientSubmitting, setNewClientSubmitting] = useState(false)
+  const [cities, setCities] = useState<{ id: string; name: string }[]>([])
+
+  useEffect(() => {
+    const monthParam = searchParams.get('month')
+    if (!monthParam) return
+    const url = new URL(window.location.href)
+    url.searchParams.delete('month')
+    router.replace(`${url.pathname}${url.search}`, { scroll: false })
+  }, [router, searchParams])
+
+  // Fetch cities for New Client form
+  useEffect(() => {
+    if (isCreatingClient && cities.length === 0) {
+      const fetchCities = async () => {
+        try {
+          // Need to get session
+          const supabase = createClient()
+          const { data } = await supabase.auth.getSession()
+          if (data.session) {
+            const res = await apiGet<{ id: string; name: string }[]>('/cities/shop', data.session.access_token)
+            setCities(res)
+          }
+        } catch (e) { console.error("Failed to load cities", e) }
+      }
+      fetchCities()
+    }
+  }, [isCreatingClient, cities.length])
+
+  const handleAddressSelect = (addr: { street: string; number: string; zip: string; city: string }) => {
+    // 1. Fill address
+    const fullAddress = `${addr.street} ${addr.number}`.trim()
+
+    // 2. Try to find city
+    // addr.city usually "Sion", "Bramois", etc.
+    const normalizedCity = addr.city.toLowerCase()
+    const foundCity = cities.find(c => c.name.toLowerCase() === normalizedCity)
+
+    setNewClient(prev => ({
+      ...prev,
+      address: fullAddress,
+      postal_code: addr.zip,
+      city_id: foundCity ? foundCity.id : prev.city_id,
+      // Also pre-fill name if we want? No, name is usually company or person name, not address label.
+    }))
+  }
+
+  const handleCreateClient = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setNewClientSubmitting(true)
+    try {
+      const supabase = createClient()
+      const { data } = await supabase.auth.getSession()
+      if (!data.session) return
+
+      const res = await apiPost<{ id: string }>('/clients/shop', {
+        ...newClient,
+        active: true
+      }, data.session.access_token)
+
+      // Success
+      await refresh() // Refresh client list
+      // Select the new client
+      setFormState(prev => ({ ...prev, client_id: res.id }))
+      setIsCreatingClient(false)
+      setNewClient({
+        name: '', address: '', postal_code: '', city_id: '', floor: '', door_code: '', phone: '', is_cms: false
+      })
+    } catch (err) {
+      alert("Erreur creation client")
+    } finally {
+      setNewClientSubmitting(false)
+    }
+  }
   const [preview, setPreview] = useState<PreviewResult | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [editingDeliveryId, setEditingDeliveryId] = useState<string | null>(null)
 
   const {
     data: deliveries,
@@ -114,9 +231,12 @@ export default function ShopReport() {
     refresh,
   } = useShopDeliveries(selectedMonth)
   const {
+    data: shopStats,
+    loading: statsLoading,
+    error: statsError,
+  } = useShopStats(selectedMonth)
+  const {
     data: periods,
-    loading: periodsLoading,
-    error: periodsError,
   } = useShopPeriods()
   const {
     data: clients,
@@ -124,25 +244,18 @@ export default function ShopReport() {
     error: clientsError,
   } = useShopClients()
 
-  const handleMonthChange = (value: string) => {
-    setSelectedMonth(value)
-
-    // [NEW] Sync delivery date with selected month
-    setFormState((prev) => ({
-      ...prev,
-      delivery_date: `${value}-01`,
-    }))
-
-    const params = new URLSearchParams(searchParams.toString())
-    params.set('month', value)
-    router.replace(`${pathname}?${params.toString()}`)
-  }
-
   const handleChange = (
-    event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
+    event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
   ) => {
     const target = event.target
     const { name, value } = target
+    if (target instanceof HTMLTextAreaElement) {
+      setFormState((prev) => ({
+        ...prev,
+        [name]: value,
+      }))
+      return
+    }
     if (target instanceof HTMLInputElement && target.type === 'checkbox') {
       setFormState((prev) => ({
         ...prev,
@@ -254,27 +367,90 @@ export default function ShopReport() {
         return
       }
 
-      const payload = {
-        client_id: formState.client_id,
-        delivery_date: formState.delivery_date,
-        time_window: formState.time_window,
-        bags: bagCount,
-        order_amount: formState.order_amount ? Number(formState.order_amount) : null,
+      if (editingDeliveryId) {
+        const payload = {
+          delivery_date: formState.delivery_date,
+          time_window: formState.time_window,
+          bags: bagCount,
+          order_amount: formState.order_amount ? Number(formState.order_amount) : null,
+          notes: formState.notes,
+        }
+        await apiPatch(`/deliveries/shop/${editingDeliveryId}`, payload, session.access_token)
+        setEditingDeliveryId(null)
+      } else {
+        const payload = {
+          client_id: formState.client_id,
+          delivery_date: formState.delivery_date,
+          time_window: formState.time_window,
+          bags: bagCount,
+          order_amount: formState.order_amount ? Number(formState.order_amount) : null,
+          notes: formState.notes,
+        }
+        await apiPost('/deliveries/shop', payload, session.access_token)
       }
-
-      await apiPost('/deliveries/shop', payload, session.access_token)
       setFormState((prev) => ({
         ...prev,
         client_id: '',
         time_window: '',
         bags: '',
+
         order_amount: '',
+        notes: '',
       }))
       await refresh()
     } catch (e: any) {
-      setSubmitError('Impossible de creer la livraison')
+      setSubmitError(editingDeliveryId ? 'Impossible de modifier la livraison' : 'Impossible de creer la livraison')
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const handleCancelEdit = () => {
+    setEditingDeliveryId(null)
+    setFormState((prev) => ({
+      ...prev,
+      client_id: '',
+      delivery_date: getToday(),
+      time_window: '',
+      bags: '',
+      order_amount: '',
+      notes: '',
+    }))
+  }
+
+  const handleEditDelivery = (row: any) => {
+    if (!row?.delivery_id) return
+    setEditingDeliveryId(row.delivery_id)
+    setFormState((prev) => ({
+      ...prev,
+      client_id: row.client_id || prev.client_id,
+      delivery_date: formatDate(row.delivery_date) || prev.delivery_date,
+      time_window: row.time_window || '',
+      bags: row.bags ?? '',
+      order_amount: row.order_amount ?? '',
+      notes: row.notes ?? '',
+    }))
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const handleCancelDelivery = async (row: any) => {
+    if (!row?.delivery_id) return
+    const reason = window.prompt("Raison de l'annulation (optionnelle) ?") ?? ''
+    try {
+      const supabase = createClient()
+      const { data: sessionData } = await supabase.auth.getSession()
+      const session = sessionData.session
+      if (!session) {
+        setSubmitError('Session inexistante')
+        return
+      }
+      await apiPost(`/deliveries/shop/${row.delivery_id}/cancel`, { reason }, session.access_token)
+      if (editingDeliveryId === row.delivery_id) {
+        handleCancelEdit()
+      }
+      await refresh()
+    } catch (e) {
+      setSubmitError("Impossible d'annuler la livraison")
     }
   }
 
@@ -310,7 +486,7 @@ export default function ShopReport() {
     <div className="p-8 space-y-8">
       <header className="space-y-2">
         <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-semibold">Livraisons - Shop</h1>
+          <h1 className="text-2xl font-semibold">Livraisons - Commerce</h1>
           {isFrozen && (
             <div className="flex items-center gap-2 rounded-full bg-orange-100 px-3 py-1">
               <span className="text-xs font-medium text-orange-700">Periode gelee</span>
@@ -319,37 +495,48 @@ export default function ShopReport() {
                   <span className="text-xs text-orange-600">
                     (par {currentFrozenPeriod.frozen_by_name || 'Admin'} le {formatDate(currentFrozenPeriod.frozen_at)})
                   </span>
-                  <a
-                    href={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1'}/reports/shop-monthly-pdf?shop_id=${currentFrozenPeriod.shop_id || ''}&month=${selectedMonth}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="ml-2 flex items-center gap-1 rounded bg-white px-2 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-50 border border-blue-200"
+
+                  <button
+                    onClick={async () => {
+                      try {
+                        const supabase = createClient()
+                        const { data } = await supabase.auth.getSession()
+                        if (!data.session) return
+
+                        const res = await fetch(`${API_BASE_URL}/reports/shop-monthly-pdf?shop_id=${currentFrozenPeriod.shop_id || ''}&month=${selectedMonth}`, {
+                          headers: { Authorization: `Bearer ${data.session.access_token}` }
+                        })
+                        if (!res.ok) throw new Error("Erreur téléchargement")
+
+                        const blob = await res.blob()
+                        const url = window.URL.createObjectURL(blob)
+                        const a = document.createElement("a")
+                        a.href = url
+                        a.download = `Commerce_Report_${selectedMonth}.pdf`
+                        document.body.appendChild(a)
+                        a.click()
+                        window.URL.revokeObjectURL(url)
+                        document.body.removeChild(a)
+                      } catch (e) {
+                        alert("Impossible de télécharger le PDF")
+                      }
+                    }}
+                    type="button"
+                    className="ml-2 flex items-center gap-1 rounded bg-white px-2 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-50 border border-blue-200 cursor-pointer"
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" /><polyline points="14 2 14 8 20 8" /></svg>
                     PDF
-                  </a>
+                  </button>
                 </>
               )}
             </div>
           )}
         </div>
-        <div className="flex items-center gap-3">
-          <label className="text-sm text-gray-600" htmlFor="shop-month">
-            Mois
-          </label>
-          <input
-            id="shop-month"
-            type="month"
-            className="border rounded px-2 py-1 text-sm"
-            value={selectedMonth}
-            onChange={(event) => handleMonthChange(event.target.value)}
-          />
-        </div>
-      </header>
+      </header >
 
       <section className="rounded-lg border p-4 space-y-4">
         <h2 className="text-sm font-medium text-gray-700">
-          Enregistrer une livraison
+          {editingDeliveryId ? 'Modifier une livraison' : 'Enregistrer une livraison'}
         </h2>
 
         {isFrozen && (
@@ -377,14 +564,134 @@ export default function ShopReport() {
                 }))
               }}
               placeholder={clientsLoading ? 'Chargement...' : 'Rechercher un client'}
+              disabled={Boolean(editingDeliveryId)}
             />
+            <button
+              type="button"
+              className="text-xs text-blue-600 underline ml-2"
+              onClick={() => setIsCreatingClient(true)}
+              disabled={Boolean(editingDeliveryId)}
+            >
+              + Nouveau Client
+            </button>
           </label>
+
+          {isCreatingClient && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+              <div className="bg-white rounded-lg p-6 max-w-lg w-full mx-4 shadow-xl max-h-[90vh] overflow-y-auto">
+                <h3 className="text-lg font-bold mb-4">Nouveau Client</h3>
+
+                <div className="space-y-4">
+                  <label className="block text-sm">
+                    Nom Complet
+                    <input
+                      className="w-full border rounded px-2 py-1 mt-1"
+                      value={newClient.name}
+                      onChange={e => setNewClient({ ...newClient, name: e.target.value })}
+                      placeholder="Nom Prénom ou Société"
+                    />
+                  </label>
+
+                  <div className="block text-sm">
+                    Recherche Adresse (Suisse)
+                    <AddressAutocomplete onSelect={handleAddressSelect} />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block text-sm">
+                      Adresse (Rue + No)
+                      <input
+                        className="w-full border rounded px-2 py-1 mt-1"
+                        value={newClient.address}
+                        onChange={e => setNewClient({ ...newClient, address: e.target.value })}
+                      />
+                    </label>
+                    <label className="block text-sm">
+                      NPA
+                      <input
+                        className="w-full border rounded px-2 py-1 mt-1"
+                        value={newClient.postal_code}
+                        onChange={e => setNewClient({ ...newClient, postal_code: e.target.value })}
+                      />
+                    </label>
+                  </div>
+
+                  <label className="block text-sm">
+                    Commune partenaire
+                    <select
+                      className="w-full border rounded px-2 py-1 mt-1"
+                      value={newClient.city_id}
+                      onChange={e => setNewClient({ ...newClient, city_id: e.target.value })}
+                    >
+                      <option value="">Choisir une commune partenaire...</option>
+                      {cities.map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <label className="block text-sm">
+                      Etage
+                      <input
+                        className="w-full border rounded px-2 py-1 mt-1"
+                        value={newClient.floor}
+                        onChange={e => setNewClient({ ...newClient, floor: e.target.value })}
+                        placeholder="ex: 3ème"
+                      />
+                    </label>
+                    <label className="block text-sm">
+                      Digicode
+                      <input
+                        className="w-full border rounded px-2 py-1 mt-1"
+                        value={newClient.door_code}
+                        onChange={e => setNewClient({ ...newClient, door_code: e.target.value })}
+                        placeholder="ex: 1234A"
+                      />
+                    </label>
+                    <label className="block text-sm">
+                      Tél
+                      <input
+                        className="w-full border rounded px-2 py-1 mt-1"
+                        value={newClient.phone}
+                        onChange={e => setNewClient({ ...newClient, phone: e.target.value })}
+                        placeholder="079..."
+                      />
+                    </label>
+                  </div>
+
+
+                </div>
+
+                <div className="flex justify-end pt-4 border-t mt-4 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsCreatingClient(false)}
+                    className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCreateClient}
+                    disabled={newClientSubmitting || !newClient.name || !newClient.city_id}
+                    className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {newClientSubmitting ? '...' : 'Créer'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {selectedClient && (
             <div className="md:col-span-2 rounded border bg-gray-50 px-3 py-2 text-sm text-gray-700">
               <div className="font-medium">{selectedClient.name}</div>
-              <div>
-                {selectedClient.address ?? ''}{' '}
-                {selectedClient.postal_code ?? ''} {selectedClient.city_name ?? ''}
+              <div>{formatClientAddress(selectedClient)}</div>
+              <div className="text-xs text-gray-500 mt-1 flex flex-wrap gap-2">
+                {selectedClient.floor && <span>Etage: {selectedClient.floor}</span>}
+                {selectedClient.door_code && <span>Code: {selectedClient.door_code}</span>}
+                {selectedClient.phone && <span>Tél: {selectedClient.phone}</span>}
               </div>
               <div>{selectedClient.is_cms ? 'Client CMS' : 'Client standard'}</div>
             </div>
@@ -435,6 +742,18 @@ export default function ShopReport() {
             </select>
           </label>
 
+          <label className="text-sm text-gray-600 md:col-span-2">
+            Remarques / Instructions (facultatif)
+            <textarea
+              className="mt-1 w-full rounded border px-2 py-1"
+              name="notes"
+              rows={2}
+              value={formState.notes}
+              onChange={handleChange}
+              placeholder="Code porte, étage, contact spécifique..."
+            />
+          </label>
+
           {tariffType === 'order_amount' && (
             <label className="text-sm text-gray-600">
               Montant Commande (CHF)
@@ -450,15 +769,6 @@ export default function ShopReport() {
             </label>
           )}
 
-          <label className="text-sm text-gray-600 flex items-center gap-2">
-            <input
-              type="checkbox"
-              name="is_cms"
-              checked={Boolean(selectedClient?.is_cms)}
-              disabled
-            />
-            Client CMS
-          </label>
           {previewError && (
             <div className="md:col-span-2 text-sm text-red-600">
               {previewError}
@@ -478,22 +788,121 @@ export default function ShopReport() {
                   {formatCHF(Number(preview.total_price))}
                 </span>
               </div>
-              <div>Part shop : {formatCHF(Number(preview.share_shop))}</div>
               <div>Part client : {formatCHF(Number(preview.share_client))}</div>
-              <div>Part ville : {formatCHF(Number(preview.share_city))}</div>
+              <div>Part commune : {formatCHF(Number(preview.share_city))}</div>
+              <div>
+                Part entreprise regionale :{' '}
+                {formatCHF(Number(preview.share_admin_region || 0))}
+              </div>
             </div>
           )}
-          <div className="md:col-span-2">
+          <div className="md:col-span-2 flex flex-wrap items-center gap-3">
             <button
               className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50"
               type="submit"
               disabled={submitting || !preview || isFrozen}
             >
-              {submitting ? 'Enregistrement...' : 'Creer la livraison'}
+              {submitting
+                ? 'Enregistrement...'
+                : editingDeliveryId
+                  ? 'Enregistrer les modifications'
+                  : 'Creer la livraison'}
             </button>
+            {editingDeliveryId && (
+              <button
+                type="button"
+                onClick={handleCancelEdit}
+                className="rounded border border-gray-200 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50"
+              >
+                Annuler la modification
+              </button>
+            )}
           </div>
         </form>
       </section >
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-medium text-gray-700">
+          Stats du mois
+        </h2>
+        {statsLoading ? (
+          <div className="text-sm text-gray-500">Chargement...</div>
+        ) : statsError ? (
+          <div className="text-sm text-red-600">{statsError}</div>
+        ) : shopStats ? (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="rounded-lg border p-4">
+                <div className="text-sm text-gray-500">Livraisons</div>
+                <div className="text-2xl font-semibold">{shopStats.total_deliveries}</div>
+                <div className="text-xs text-gray-400">
+                  {formatPercent(shopStats.deliveries_change_pct)} vs {shopStats.previous_month}
+                </div>
+              </div>
+              <div className="rounded-lg border p-4">
+                <div className="text-sm text-gray-500">Clients uniques</div>
+                <div className="text-2xl font-semibold">{shopStats.unique_clients}</div>
+                <div className="text-xs text-gray-400">
+                  Recurrents: {shopStats.repeat_clients} ({shopStats.repeat_rate_pct.toFixed(1)}%)
+                </div>
+              </div>
+              <div className="rounded-lg border p-4">
+                <div className="text-sm text-gray-500">Sacs moyens</div>
+                <div className="text-2xl font-semibold">{shopStats.average_bags.toFixed(1)}</div>
+                <div className="text-xs text-gray-400">Total sacs: {shopStats.total_bags}</div>
+              </div>
+              <div className="rounded-lg border p-4">
+                <div className="text-sm text-gray-500">Volume livre</div>
+                <div className="text-2xl font-semibold">{formatCHF(shopStats.total_volume_chf)}</div>
+                <div className="text-xs text-gray-400">Estimation total CHF</div>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="rounded-lg border p-4">
+                <div className="text-sm text-gray-500">Jours actifs</div>
+                <div className="text-2xl font-semibold">{shopStats.active_days}</div>
+                <div className="text-xs text-gray-400">Mois en cours</div>
+              </div>
+              <div className="rounded-lg border p-4">
+                <div className="text-sm text-gray-500">Livraisons / jour</div>
+                <div className="text-2xl font-semibold">{shopStats.deliveries_per_active_day.toFixed(1)}</div>
+                <div className="text-xs text-gray-400">Jours actifs</div>
+              </div>
+              <div className="rounded-lg border p-4">
+                <div className="text-sm text-gray-500">Pic du mois</div>
+                <div className="text-2xl font-semibold">
+                  {shopStats.peak_day_deliveries || 0}
+                </div>
+                <div className="text-xs text-gray-400">
+                  {shopStats.peak_day ? formatDate(shopStats.peak_day) : 'n/a'}
+                </div>
+              </div>
+              <div className="rounded-lg border p-4">
+                <div className="text-sm text-gray-500">Evolution livraisons</div>
+                <div className="text-2xl font-semibold">{formatPercent(shopStats.deliveries_change_pct)}</div>
+                <div className="text-xs text-gray-400">Vs {shopStats.previous_month}</div>
+              </div>
+            </div>
+            <div className="rounded-lg border p-4">
+              <div className="text-sm font-medium text-gray-700">Top clients</div>
+              {shopStats.top_clients.length === 0 ? (
+                <div className="text-sm text-gray-500">Aucun client recurrent.</div>
+              ) : (
+                <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {shopStats.top_clients.map((client) => (
+                    <div key={client.client_id} className="rounded border px-3 py-2">
+                      <div className="text-sm font-medium">{client.client_name}</div>
+                      <div className="text-xs text-gray-500">
+                        {client.deliveries} livraisons - {client.bags} sacs
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </section>
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium text-gray-700">
@@ -517,6 +926,9 @@ export default function ShopReport() {
                       {TABLE_LABELS[col] ?? col}
                     </th>
                   ))}
+                  <th className="border px-3 py-2 text-left font-medium text-gray-700">
+                    Action
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -525,8 +937,10 @@ export default function ShopReport() {
                     {TABLE_COLUMNS.map((col) => {
                       const value = row[col]
                       const cell =
-                        col === 'total_price' || col === 'share_shop'
+                        col === 'total_price' || col === 'share_admin_region'
                           ? formatCHF(Number(value))
+                          : col === 'status'
+                            ? formatStatus(value)
                           : col === 'delivery_date'
                             ? formatDate(value)
                             : String(value ?? '')
@@ -539,6 +953,32 @@ export default function ShopReport() {
                         </td>
                       )
                     })}
+                    <td className="border px-3 py-2 whitespace-nowrap">
+                      {(() => {
+                        const status = String(row.status || '')
+                        const canEdit = EDITABLE_STATUSES.has(status) && !isFrozen
+                        return (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              className="text-xs font-medium text-blue-600 hover:text-blue-800 disabled:text-gray-400"
+                              onClick={() => handleEditDelivery(row)}
+                              disabled={!canEdit}
+                            >
+                              Modifier
+                            </button>
+                            <button
+                              type="button"
+                              className="text-xs font-medium text-red-600 hover:text-red-800 disabled:text-gray-400"
+                              onClick={() => handleCancelDelivery(row)}
+                              disabled={!canEdit}
+                            >
+                              Annuler
+                            </button>
+                          </div>
+                        )
+                      })()}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -549,52 +989,6 @@ export default function ShopReport() {
         )}
       </section>
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium text-gray-700">
-          Periodes gelees
-        </h2>
-
-        {periodsLoading ? (
-          <div className="text-sm text-gray-500">Chargement...</div>
-        ) : periodsError ? (
-          <div className="text-sm text-red-600">{periodsError}</div>
-        ) : periods && periods.length > 0 ? (
-          <div className="overflow-auto border rounded">
-            <table className="min-w-full border-collapse text-sm">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="border px-3 py-2 text-left font-medium text-gray-700">
-                    Mois
-                  </th>
-                  <th className="border px-3 py-2 text-left font-medium text-gray-700">
-                    Gele le
-                  </th>
-                  <th className="border px-3 py-2 text-left font-medium text-gray-700">
-                    Commentaire
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {periods.map((row, index) => (
-                  <tr key={index} className="odd:bg-white even:bg-gray-50">
-                    <td className="border px-3 py-2 whitespace-nowrap">
-                      {formatMonth(row.period_month)}
-                    </td>
-                    <td className="border px-3 py-2 whitespace-nowrap">
-                      {formatDate(row.frozen_at)}
-                    </td>
-                    <td className="border px-3 py-2 whitespace-nowrap">
-                      {row.comment ?? ''}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="text-sm text-gray-500">Aucune periode gelee.</div>
-        )}
-      </section>
     </div >
   )
 }

@@ -1,0 +1,354 @@
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal, ROUND_HALF_UP
+import re
+
+from app.db.session import get_db_connection
+from app.core.billing_reference import generate_reference
+
+
+@dataclass
+class RecipientLine:
+    shop_id: str | None
+    delivery_id: str | None
+    amount_due: Decimal
+    meta: dict
+
+
+def _get_vat_rate(cur, period_month: date) -> Decimal:
+    cur.execute("SELECT to_regclass('public.app_settings')")
+    table = cur.fetchone()
+    if not table or table[0] is None:
+        return Decimal("0.081")
+    cur.execute(
+        """
+        SELECT value_numeric
+        FROM public.app_settings
+        WHERE key = 'vat_rate'
+          AND effective_from <= %s
+        ORDER BY effective_from DESC
+        LIMIT 1
+        """,
+        (period_month,),
+    )
+    row = cur.fetchone()
+    if not row or row[0] is None:
+        return Decimal("0.081")
+    return Decimal(str(row[0]))
+
+
+def _quantize(value: Decimal) -> Decimal:
+    return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _split_vat(amount_ttc: Decimal, vat_rate: Decimal) -> tuple[Decimal, Decimal, Decimal]:
+    if amount_ttc <= 0:
+        return Decimal("0.00"), Decimal("0.00"), Decimal("0.00")
+    divisor = Decimal("1.0") + vat_rate
+    amount_ht = amount_ttc / divisor
+    amount_vat = amount_ttc - amount_ht
+    return _quantize(amount_ht), _quantize(amount_vat), _quantize(amount_ttc)
+
+
+def _split_address_parts(value: str | None) -> tuple[str | None, str | None]:
+    if not value:
+        return None, None
+    address = value.strip()
+    if not address:
+        return None, None
+    match = re.match(r"^(?P<num>\\d+[A-Za-z0-9\\-/]*)\\s+(?P<street>.+)$", address)
+    if match:
+        return match.group("street"), match.group("num")
+    match = re.match(r"^(?P<street>.+?)\\s+(?P<num>\\d+[A-Za-z0-9\\-/]*)$", address)
+    if match:
+        return match.group("street"), match.group("num")
+    return address, None
+
+
+def _is_independent_hq(hq_id: str | None, hq_name: str | None) -> bool:
+    if hq_id is None:
+        return True
+    if hq_name is None:
+        return True
+    return "indep" in hq_name.lower()
+
+
+def aggregate_billing_run(
+    *,
+    admin_region_id: str,
+    period_month: date,
+    created_by: str | None,
+    jwt_claims: str,
+) -> dict:
+    """
+    Builds payor-centric billing documents for a region + month.
+    Returns a summary of created documents/lines.
+    """
+    with get_db_connection(jwt_claims) as conn:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO billing_run (
+                        admin_region_id,
+                        period_month,
+                        status,
+                        created_by,
+                        updated_by
+                    )
+                    VALUES (%s, %s, 'draft', %s, %s)
+                    ON CONFLICT (admin_region_id, period_month)
+                    DO UPDATE SET updated_at = now(), updated_by = EXCLUDED.updated_by
+                    RETURNING id
+                    """,
+                    (admin_region_id, period_month, created_by, created_by),
+                )
+                run_id = cur.fetchone()[0]
+
+                cur.execute(
+                    """
+                    SELECT
+                        billing_name,
+                        billing_iban,
+                        billing_street,
+                        billing_house_num,
+                        billing_postal_code,
+                        billing_city,
+                        billing_country,
+                        address
+                    FROM admin_region
+                    WHERE id = %s
+                    """,
+                    (admin_region_id,),
+                )
+                billing_row = cur.fetchone()
+                if billing_row:
+                    (
+                        billing_name,
+                        billing_iban,
+                        billing_street,
+                        billing_house_num,
+                        billing_postal_code,
+                        billing_city,
+                        billing_country,
+                        admin_region_address,
+                    ) = billing_row
+                else:
+                    billing_name = None
+                    billing_iban = None
+                    billing_street = None
+                    billing_house_num = None
+                    billing_postal_code = None
+                    billing_city = None
+                    billing_country = None
+                    admin_region_address = None
+
+                if billing_street is None and admin_region_address:
+                    billing_street, billing_house_num = _split_address_parts(admin_region_address)
+
+                cur.execute(
+                    """
+                    DELETE FROM billing_document_line
+                    WHERE document_id IN (
+                        SELECT id FROM billing_document WHERE run_id = %s
+                    )
+                    """,
+                    (run_id,),
+                )
+                cur.execute("DELETE FROM billing_document WHERE run_id = %s", (run_id,))
+
+                vat_rate = _get_vat_rate(cur, period_month)
+
+                cur.execute(
+                    """
+                    SELECT
+                        d.id AS delivery_id,
+                        d.delivery_date,
+                        s.id AS shop_id,
+                        s.name AS shop_name,
+                        s.hq_id,
+                        h.name AS hq_name,
+                        c.id AS city_id,
+                        c.name AS city_name,
+                        c.parent_city_id,
+                        pc.name AS parent_city_name,
+                        l.client_name,
+                        COALESCE(l.city_name, c.name) AS delivery_city_name,
+                        l.bags,
+                        f.total_price,
+                        f.share_city,
+                        f.share_admin_region
+                    FROM delivery d
+                    JOIN shop s ON s.id = d.shop_id
+                    JOIN city c ON c.id = d.city_id
+                    LEFT JOIN city pc ON pc.id = c.parent_city_id
+                    LEFT JOIN hq h ON h.id = s.hq_id
+                    JOIN delivery_logistics l ON l.delivery_id = d.id
+                    JOIN delivery_financial f ON f.delivery_id = d.id
+                    WHERE d.delivery_date >= %s::date
+                      AND d.delivery_date < (%s::date + INTERVAL '1 month')
+                      AND c.admin_region_id = %s
+                    ORDER BY d.delivery_date
+                    """,
+                    (period_month, period_month, admin_region_id),
+                )
+
+                payor_lines: dict[tuple[str, str], list[RecipientLine]] = defaultdict(list)
+
+                for (
+                    delivery_id,
+                    delivery_date,
+                    shop_id,
+                    shop_name,
+                    hq_id,
+                    hq_name,
+                    city_id,
+                    city_name,
+                    parent_city_id,
+                    parent_city_name,
+                    client_name,
+                    delivery_city_name,
+                    bags,
+                    total_price,
+                    share_city,
+                    share_admin_region,
+                ) in cur.fetchall():
+                    commune_id = parent_city_id or city_id
+                    commune_name = parent_city_name or city_name
+
+                    share_city_amount = Decimal(str(share_city or 0))
+                    share_admin_amount = Decimal(str(share_admin_region or 0))
+
+                    meta = {
+                        "delivery_date": delivery_date.isoformat(),
+                        "client_name": client_name,
+                        "commune_name": commune_name,
+                        "bags": bags,
+                        "total_price": float(total_price) if total_price is not None else None,
+                        "shop_name": shop_name,
+                        "delivery_city_name": delivery_city_name,
+                    }
+
+                    if commune_id and share_city_amount > 0:
+                        payor_lines[("COMMUNE", str(commune_id))].append(
+                            RecipientLine(
+                                shop_id=str(shop_id),
+                                delivery_id=str(delivery_id),
+                                amount_due=share_city_amount,
+                                meta=meta,
+                            )
+                        )
+
+                    if share_admin_amount > 0:
+                        if _is_independent_hq(str(hq_id) if hq_id else None, hq_name):
+                            payor_lines[("SHOP_INDEP", str(shop_id))].append(
+                                RecipientLine(
+                                    shop_id=str(shop_id),
+                                    delivery_id=str(delivery_id),
+                                    amount_due=share_admin_amount,
+                                    meta=meta,
+                                )
+                            )
+                        else:
+                            payor_lines[("HQ", str(hq_id))].append(
+                                RecipientLine(
+                                    shop_id=str(shop_id),
+                                    delivery_id=str(delivery_id),
+                                    amount_due=share_admin_amount,
+                                    meta=meta,
+                                )
+                            )
+
+                document_count = 0
+                line_count = 0
+
+                for (recipient_type, recipient_id), lines in payor_lines.items():
+                    total_ttc = sum((line.amount_due for line in lines), Decimal("0.00"))
+                    amount_ht, amount_vat, amount_ttc = _split_vat(total_ttc, vat_rate)
+                    reference_seed = f"{recipient_type}{recipient_id}{period_month.strftime('%Y%m')}"
+                    reference_snapshot = generate_reference(billing_iban or "", reference_seed)
+                    payment_message_snapshot = f"Facturation DringDring {period_month.strftime('%Y-%m')}"
+
+                    cur.execute(
+                        """
+                        INSERT INTO billing_document (
+                            run_id,
+                            recipient_type,
+                            recipient_id,
+                            period_month,
+                            amount_ht,
+                            amount_vat,
+                            amount_ttc,
+                            vat_rate,
+                            creditor_name_snapshot,
+                            creditor_iban_snapshot,
+                            creditor_street_snapshot,
+                            creditor_house_num_snapshot,
+                            creditor_postal_code_snapshot,
+                            creditor_city_snapshot,
+                            creditor_country_snapshot,
+                            reference_snapshot,
+                            payment_message_snapshot,
+                            status,
+                            created_by,
+                            updated_by
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s, %s)
+                        RETURNING id
+                        """,
+                        (
+                            run_id,
+                            recipient_type,
+                            recipient_id,
+                            period_month,
+                            amount_ht,
+                            amount_vat,
+                            amount_ttc,
+                            vat_rate,
+                            billing_name,
+                            billing_iban,
+                            billing_street,
+                            billing_house_num,
+                            billing_postal_code,
+                            billing_city,
+                            billing_country,
+                            reference_snapshot,
+                            payment_message_snapshot,
+                            created_by,
+                            created_by,
+                        ),
+                    )
+                    document_id = cur.fetchone()[0]
+                    document_count += 1
+
+                    from psycopg.types.json import Jsonb
+
+                    for line in lines:
+                        cur.execute(
+                            """
+                            INSERT INTO billing_document_line (
+                                document_id,
+                                shop_id,
+                                delivery_id,
+                                amount_due,
+                                meta
+                            )
+                            VALUES (%s, %s, %s, %s, %s)
+                            """,
+                            (
+                                document_id,
+                                line.shop_id,
+                                line.delivery_id,
+                                line.amount_due,
+                                Jsonb(line.meta),
+                            ),
+                        )
+                        line_count += 1
+
+                return {
+                    "run_id": str(run_id),
+                    "documents": document_count,
+                    "lines": line_count,
+                    "vat_rate": str(vat_rate),
+                }

@@ -1,0 +1,345 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Info, Plus, Trash2, CreditCard } from "lucide-react"
+import { apiPost, apiPut } from '@/lib/api'
+import { toast } from 'sonner'
+import { createClient } from '@/lib/supabase/client'
+import { useAuth } from '@/app/(protected)/providers/AuthProvider'
+
+interface TariffDialogProps {
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    tariffToEdit: any | null
+    onSuccess: () => void
+}
+
+export function TariffDialog({ open, onOpenChange, tariffToEdit, onSuccess }: TariffDialogProps) {
+    const { user, adminContextRegion } = useAuth()
+    const [name, setName] = useState('')
+    const [ruleType, setRuleType] = useState('bags_price')
+    const [bagPrice, setBagPrice] = useState('5.00')
+    const [cmsDiscount, setCmsDiscount] = useState('0')
+    const [thresholds, setThresholds] = useState<{ min: string, max: string, price: string }[]>([
+        { min: '0', max: '50', price: '12.00' },
+        { min: '50', max: '', price: '8.00' }
+    ])
+
+    const [payerType, setPayerType] = useState('client')
+    const [clientSharePercent, setClientSharePercent] = useState('50')
+    const [loading, setLoading] = useState(false)
+
+    // Load Data
+    useEffect(() => {
+        if (tariffToEdit) {
+            setName(tariffToEdit.name)
+            const normalizedRuleType = tariffToEdit.rule_type === 'bags' ? 'bags_price' : tariffToEdit.rule_type
+            setRuleType(normalizedRuleType)
+
+            // Map Config
+            if (normalizedRuleType === 'bags_price') {
+                const pricing = tariffToEdit.rule?.pricing ?? tariffToEdit.rule ?? {}
+                const priceValue = pricing.price_per_2_bags ?? pricing.price_per_bag ?? pricing.amount_per_bag ?? '5.00'
+                setBagPrice(String(priceValue))
+                setCmsDiscount(String(pricing.cms_discount ?? '0'))
+            } else {
+                // Map thresholds
+                const pricing = tariffToEdit.rule?.pricing ?? tariffToEdit.rule ?? {}
+                const th = pricing.thresholds || []
+                setThresholds(th.map((t: any) => ({
+                    min: String(t.min),
+                    max: t.max ? String(t.max) : '',
+                    price: String(t.price)
+                })))
+            }
+
+            // Map Shares
+            if (tariffToEdit.share) {
+                if (tariffToEdit.share.client === 100) setPayerType('client')
+                else if (tariffToEdit.share.shop === 100) setPayerType('shop')
+                else if (Math.abs(tariffToEdit.share.shop - 33.33) < 1) setPayerType('equal_3')
+                else {
+                    setPayerType('shared')
+                    setClientSharePercent(String(tariffToEdit.share.client || '50'))
+                }
+            }
+
+        } else {
+            setName('')
+            setRuleType('bags_price')
+            setBagPrice('5.00')
+            setCmsDiscount('0')
+            setThresholds([
+                { min: '0', max: '50', price: '12.00' },
+                { min: '50', max: '', price: '8.00' }
+            ])
+            setPayerType('client')
+        }
+    }, [tariffToEdit, open])
+
+    const addThreshold = () => {
+        setThresholds([...thresholds, { min: '', max: '', price: '' }])
+    }
+
+    const removeThreshold = (index: number) => {
+        setThresholds(thresholds.filter((_, i) => i !== index))
+    }
+
+    const updateThreshold = (index: number, field: 'min' | 'max' | 'price', value: string) => {
+        const newThresholds = [...thresholds]
+        newThresholds[index][field] = value
+        setThresholds(newThresholds)
+    }
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault()
+
+        const supabase = createClient()
+        const { data: { session } } = await supabase.auth.getSession()
+
+        if (!session?.access_token) {
+            toast.error('Session expiree')
+            return
+        }
+        if (user?.role === 'super_admin' && !adminContextRegion?.id) {
+            toast.error('Selectionnez une entreprise regionale')
+            return
+        }
+
+        setLoading(true)
+        try {
+            // Construct JSON Rule
+            let rulePayload: any = {}
+            if (ruleType === 'bags_price') {
+                rulePayload = {
+                    pricing: {
+                        price_per_2_bags: parseFloat(bagPrice),
+                        cms_discount: parseFloat(cmsDiscount)
+                    }
+                }
+            } else {
+                // order_amount - threshold_list
+                rulePayload = {
+                    pricing: {
+                        thresholds: thresholds.map(t => ({
+                            min: parseFloat(t.min || '0'),
+                            max: t.max ? parseFloat(t.max) : null,
+                            price: parseFloat(t.price || '0')
+                        }))
+                    }
+                }
+            }
+
+            // Construct JSON Share
+            let sharePayload: any = {}
+            if (payerType === 'client') {
+                sharePayload = { client: 100, shop: 0, city: 0, admin_region: 0 }
+            } else if (payerType === 'shop') {
+                sharePayload = { client: 0, shop: 100, city: 0, admin_region: 0 }
+            } else if (payerType === 'equal_3') {
+                // 33.33 each
+                sharePayload = { client: 33.33, shop: 33.33, city: 33.34, admin_region: 0 }
+            } else {
+                // Custom or old shared logic (Client vs Shop)
+                const clientPct = parseFloat(clientSharePercent)
+                sharePayload = { client: clientPct, shop: 100 - clientPct, city: 0, admin_region: 0 }
+            }
+
+            const backendRuleType = ruleType === 'bags_price' ? 'bags' : ruleType
+            const payload = {
+                name,
+                rule_type: backendRuleType,
+                rule: rulePayload,
+                share: sharePayload
+            }
+            if (user?.role === 'super_admin' && adminContextRegion?.id) {
+                payload.admin_region_id = adminContextRegion.id
+            }
+
+            if (tariffToEdit) {
+                await apiPut(`/tariffs/${tariffToEdit.id}`, payload, session.access_token)
+                toast.success('Tarif mis a jour')
+            } else {
+                await apiPost('/tariffs', payload, session.access_token)
+                toast.success('Tarif cree')
+            }
+
+            onSuccess()
+            onOpenChange(false)
+        } catch (error) {
+            console.error(error)
+            toast.error("Erreur lors de l'enregistrement")
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                    <DialogTitle>{tariffToEdit ? 'Modifier le Tarif' : 'Nouveau Tarif'}</DialogTitle>
+                </DialogHeader>
+
+                <form onSubmit={handleSubmit} className="space-y-6 py-4">
+                    <div className="space-y-2">
+                        <Label>Nom de la Grille</Label>
+                        <Input
+                            value={name}
+                            onChange={e => setName(e.target.value)}
+                            placeholder="Ex: Standard 2024"
+                            required
+                        />
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label>Type de Règle</Label>
+                        <Select value={ruleType} onValueChange={setRuleType}>
+                            <SelectTrigger>
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="bags_price">Prix par Sac (Standard)</SelectItem>
+                                <SelectItem value="order_amount">Montant du Panier (Paliers)</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+
+                    {/* Rule Config Area */}
+                    <div className="space-y-4 border p-4 rounded-md bg-gray-50/50">
+                        <h3 className="font-medium flex items-center gap-2">
+                            <Info className="w-4 h-4 text-emerald-500" />
+                            Configuration du Prix
+                        </h3>
+
+                        {ruleType === 'bags_price' ? (
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <Label>Prix pour 2 sacs (CHF)</Label>
+                                    <Input
+                                        type="number" step="0.05"
+                                        value={bagPrice}
+                                        onChange={e => setBagPrice(e.target.value)}
+                                        required
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>Rabais CMS (CHF)</Label>
+                                    <Input
+                                        type="number" step="0.05"
+                                        value={cmsDiscount}
+                                        onChange={e => setCmsDiscount(e.target.value)}
+                                    />
+                                    <p className="text-xs text-muted-foreground">Déduit si client CMS</p>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <Label>Paliers de prix</Label>
+                                    <Button type="button" variant="outline" size="sm" onClick={addThreshold}>
+                                        <Plus className="w-4 h-4 mr-2" />
+                                        Ajouter un palier
+                                    </Button>
+                                </div>
+                                <div className="space-y-2">
+                                    {thresholds.map((t, i) => (
+                                        <div key={i} className="flex gap-2 items-end">
+                                            <div className="w-24">
+                                                <Label className="text-xs">Min (CHF)</Label>
+                                                <Input
+                                                    type="number"
+                                                    value={t.min}
+                                                    onChange={e => updateThreshold(i, 'min', e.target.value)}
+                                                    placeholder="0"
+                                                />
+                                            </div>
+                                            <div className="w-24">
+                                                <Label className="text-xs">Max (CHF)</Label>
+                                                <Input
+                                                    type="number"
+                                                    value={t.max}
+                                                    onChange={e => updateThreshold(i, 'max', e.target.value)}
+                                                    placeholder="Inf"
+                                                />
+                                            </div>
+                                            <div className="w-24">
+                                                <Label className="text-xs">Prix (CHF)</Label>
+                                                <Input
+                                                    type="number"
+                                                    value={t.price}
+                                                    onChange={e => updateThreshold(i, 'price', e.target.value)}
+                                                    placeholder="0.00"
+                                                />
+                                            </div>
+                                            <Button
+                                                type="button" variant="ghost" size="icon"
+                                                onClick={() => removeThreshold(i)}
+                                                className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                                            >
+                                                <Trash2 className="w-4 h-4" />
+                                            </Button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Share Config Area */}
+                    <div className="space-y-4 border p-4 rounded-md bg-gray-50/50">
+                        <h3 className="font-medium flex items-center gap-2">
+                            <CreditCard className="w-4 h-4 text-green-500" />
+                            Répartition du Paiement
+                        </h3>
+
+                        <div className="space-y-4">
+                            <Select value={payerType} onValueChange={setPayerType}>
+                                <SelectTrigger>
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="client">Client paye 100%</SelectItem>
+                                    <SelectItem value="shop">Commerce paye 100%</SelectItem>
+                                    <SelectItem value="equal_3">Partagé équitablement (Client/Commerce/Commune)</SelectItem>
+                                    <SelectItem value="shared">Partagé (Client / Commerce)</SelectItem>
+                                </SelectContent>
+                            </Select>
+
+                            {payerType === 'shared' && (
+                                <div className="space-y-2 pl-4 border-l-2 border-emerald-200">
+                                    <Label>Part du Client (%)</Label>
+                                    <div className="flex items-center gap-4">
+                                        <Input
+                                            type="number" min="0" max="100"
+                                            value={clientSharePercent}
+                                            onChange={e => setClientSharePercent(e.target.value)}
+                                            className="w-24"
+                                        />
+                                        <span className="text-sm text-gray-500">
+                                            Le commerce paiera {100 - parseFloat(clientSharePercent || '0')}%
+                                        </span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    <DialogFooter>
+                        <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                            Annuler
+                        </Button>
+                        <Button type="submit" disabled={loading}>
+                            {loading ? 'Enregistrement...' : 'Enregistrer'}
+                        </Button>
+                    </DialogFooter>
+                </form>
+            </DialogContent>
+        </Dialog>
+    )
+}

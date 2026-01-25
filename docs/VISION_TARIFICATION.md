@@ -3,6 +3,11 @@ DringDring — Vision fonctionnelle et institutionnelle de la tarification
 
 La tarification est un pilier fonctionnel central de DringDring.
 
+Modele technique (implementation):
+- Une grille regionale (tariff_grid) contient le nom et le perimetre.
+- Les versions sont portees par tariff_version (valid_from/valid_to).
+- Les shops pointent vers une version active via shop.tariff_version_id.
+
 Elle permet :
 
 de rémunérer les opérateurs de livraison,
@@ -119,7 +124,7 @@ Shop : 10 CHF
 
 Collectivité : 10 CHF
 
-👉 Ces montants sont :
+Note: Ces montants sont :
 
 persistés dans la livraison,
 
@@ -127,7 +132,33 @@ utilisés pour les décomptes,
 
 non recalculés a posteriori.
 
-5. Gouvernance des tarifs
+5. Modèle de Facturation Multi-Payeurs (Nouveau)
+
+L'objectif est de passer d'une vision "Shop" à une vision "Payeur".
+
+5.1. Les 3 Flux de Facturation
+1.  **Flux HQ (Sièges)** :
+    *   Regroupe tous les shops d'un même HQ (ex: Migros Valais).
+    *   Somme les Parts Shop + Parts Client (si le shop encaisse).
+    *   Génère **une seule facture mensuelle** pour le HQ.
+
+2.  **Flux Communes (Collectivités)** :
+    *   Regroupe toutes les livraisons subventionnées sur le territoire de la commune.
+    *   Somme les Parts Commune.
+    *   Génère **une seule facture mensuelle** pour l'administration communale.
+
+3.  **Flux Indépendants** :
+    *   Concerne les shops sans HQ.
+    *   Fonctionnement identique au flux HQ (mais pour un seul shop).
+
+5.2. Moteur d'Agrégation
+Un moteur d'agrégation mensuel est responsable de :
+1.  Scanner les livraisons validées/gelées.
+2.  Grouper les coûts par `recipient_id` (HQ, City, Shop).
+3.  Produire une entrée dans la table `invoices`.
+4.  Générer le PDF avec QR-Facture.
+
+6. Gouvernance des tarifs
 5.1. Rôles et responsabilités
 
 Super Admin

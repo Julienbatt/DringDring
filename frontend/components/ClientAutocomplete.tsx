@@ -16,6 +16,7 @@ type Props = {
   value: string
   onChange: (clientId: string) => void
   placeholder?: string
+  disabled?: boolean
 }
 
 export default function ClientAutocomplete({
@@ -23,6 +24,7 @@ export default function ClientAutocomplete({
   value,
   onChange,
   placeholder = 'Rechercher un client',
+  disabled = false,
 }: Props) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -61,15 +63,19 @@ export default function ClientAutocomplete({
     <div className="relative" ref={containerRef}>
       <input
         type="text"
-        className="w-full rounded border px-2 py-1"
+        className="w-full rounded border px-2 py-1 disabled:bg-slate-100 disabled:text-slate-500"
         placeholder={placeholder}
         value={query}
         onChange={(event) => {
+          if (disabled) return
           setQuery(event.target.value)
           onChange('')
           setOpen(true)
         }}
-        onFocus={() => setOpen(true)}
+        onFocus={() => {
+          if (!disabled) setOpen(true)
+        }}
+        disabled={disabled}
       />
 
       {open && filteredClients.length > 0 && (

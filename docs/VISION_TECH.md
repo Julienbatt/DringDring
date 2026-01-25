@@ -36,7 +36,7 @@ directes depuis Supabase (RLS actif)
 
 ou via le backend pour des vues agrégées
 
-👉 Cette règle évite toute divergence entre logique métier et sécurité.
+Note: Cette règle évite toute divergence entre logique métier et sécurité.
 
 3. Stack technique retenue
 3.1. Frontend
@@ -128,7 +128,7 @@ avec le contexte JWT actif
 
 ou via des RPC SQL protégées par RLS
 
-👉 Les politiques RLS restent le garde-fou ultime, même en cas de bug backend.
+Note: Les politiques RLS restent le garde-fou ultime, même en cas de bug backend.
 
 5. Modèle de données : principes directeurs
 5.1. Livraison modulaire (éviter la “God Table”)
@@ -143,7 +143,7 @@ delivery_financial : snapshot financier (immuable)
 
 delivery_status : états et transitions
 
-👉 Cela permet :
+Note: Cela permet :
 
 de corriger la logistique sans toucher aux finances
 
@@ -161,7 +161,7 @@ Chaque livraison référence une version précise
 
 Les montants calculés sont copiés dans la livraison
 
-👉 Aucune livraison passée n’est jamais recalculée.
+Note: Aucune livraison passée n’est jamais recalculée.
 
 6. Moteur de tarification
 6.1. Localisation de la logique
@@ -204,6 +204,15 @@ exports CSV / PDF générés côté backend
 
 toutes les données financières sont traçables à la ligne de livraison
 
+7.1. Génération de documents & Compliance (Swiss QR Bill)
+La plateforme génère des factures strictement conformes aux normes SIX Interbank Clearing.
+
+Règles impératives :
+- **Format** : Section de paiement A6 (210x105mm) en bas de page A4.
+- **Visuel** : Croix Suisse de 7x7mm au centre du QR.
+- **Données** : Support des références structurées (QRR) et adresses structurées.
+- **Bibliothèque** : Utilisation de moteurs PDF vectoriels (ReportLab) avec coordonnées absolues pour garantir la précision millimétrique.
+
 8. Coût et sobriété technique
 
 Les choix techniques visent :
@@ -234,7 +243,7 @@ rester maintenable et sobre dans le temps
 
 Ce document constitue le cadre technique de référence du projet.
 
-🔒 Document normatif
+ Document normatif
 
 Toute implémentation doit être conforme à ce document.
 Toute déviation doit être explicitement discutée et justifiée.

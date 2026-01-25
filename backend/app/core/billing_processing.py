@@ -1,5 +1,6 @@
 from datetime import date, datetime, timezone
 import hashlib
+import re
 
 from fastapi import HTTPException
 
@@ -7,6 +8,22 @@ from app.db.session import get_db_connection
 from app.pdf.invoice_qr_bill import build_recipient_invoice_with_qr_bill
 from app.pdf.shop_monthly_report import build_shop_monthly_pdf
 from app.storage.supabase_storage import upload_pdf_bytes
+from app.core.billing_reference import generate_reference
+
+
+def _split_address_parts(value: str | None) -> tuple[str | None, str | None]:
+    if not value:
+        return None, None
+    address = value.strip()
+    if not address:
+        return None, None
+    match = re.match(r"^(?P<num>\\d+[A-Za-z0-9\\-/]*)\\s+(?P<street>.+)$", address)
+    if match:
+        return match.group("street"), match.group("num")
+    match = re.match(r"^(?P<street>.+?)\\s+(?P<num>\\d+[A-Za-z0-9\\-/]*)$", address)
+    if match:
+        return match.group("street"), match.group("num")
+    return address, None
 
 def freeze_shop_billing_period(
     cur,
@@ -40,10 +57,32 @@ def freeze_shop_billing_period(
     # 2. Fetch Shop Data (with address for QR bill)
     cur.execute(
         """
-        SELECT s.name, c.name, h.name, s.address, c.postal_code
+        SELECT
+            s.name,
+            c.name,
+            h.name,
+            s.address,
+            cpc.postal_code,
+            c.admin_region_id,
+            ar.billing_name,
+            ar.billing_iban,
+            ar.billing_street,
+            ar.billing_house_num,
+            ar.billing_postal_code,
+            ar.billing_city,
+            ar.billing_country,
+            ar.address
         FROM shop s
         JOIN city c ON c.id = s.city_id
         LEFT JOIN hq h ON h.id = s.hq_id
+        JOIN admin_region ar ON ar.id = c.admin_region_id
+        LEFT JOIN LATERAL (
+            SELECT postal_code
+            FROM city_postal_code cpc
+            WHERE cpc.city_id = c.id
+            ORDER BY postal_code
+            LIMIT 1
+        ) cpc ON true
         WHERE s.id = %s
         """,
         (shop_id,),
@@ -51,7 +90,31 @@ def freeze_shop_billing_period(
     shop_row = cur.fetchone()
     if not shop_row:
         raise HTTPException(status_code=404, detail="Shop not found")
-    shop_name, shop_city, hq_name, shop_address, shop_postal_code = shop_row
+    (
+        shop_name,
+        shop_city,
+        hq_name,
+        shop_address,
+        shop_postal_code,
+        _admin_region_id,
+        billing_name,
+        billing_iban,
+        billing_street,
+        billing_house_num,
+        billing_postal_code,
+        billing_city,
+        billing_country,
+        admin_region_address,
+    ) = shop_row
+
+    if billing_street is None and admin_region_address:
+        billing_street, billing_house_num = _split_address_parts(admin_region_address)
+    has_billing_override = (
+        billing_name
+        and billing_iban
+        and billing_postal_code
+        and billing_city
+    )
 
     # 3. Fetch Deliveries
     cur.execute(
@@ -127,8 +190,8 @@ def freeze_shop_billing_period(
             ) in deliveries
         ]
         
-        # Generate reference number (simple format for now)
-        reference = f"RF{period_month.strftime('%Y%m')}{shop_id[:8].upper()}"
+        reference_seed = f"{period_month.strftime('%Y%m')}{shop_id}"
+        reference = generate_reference(billing_iban or "", reference_seed)
         
         # Use new Swiss QR Bill compliant invoice
         pdf_buffer = build_recipient_invoice_with_qr_bill(
@@ -143,6 +206,13 @@ def freeze_shop_billing_period(
             is_preview=False,
             payment_message=f"Facturation commerce DringDring {period_month.strftime('%Y-%m')}",
             reference=reference,
+            creditor_iban=billing_iban if has_billing_override else None,
+            creditor_name=billing_name if has_billing_override else None,
+            creditor_street=billing_street if has_billing_override else None,
+            creditor_house_num=billing_house_num if has_billing_override else None,
+            creditor_postal_code=billing_postal_code if has_billing_override else None,
+            creditor_city=billing_city if has_billing_override else None,
+            creditor_country=billing_country if has_billing_override else None,
         )
     else:
         pdf_buffer = build_shop_monthly_pdf(

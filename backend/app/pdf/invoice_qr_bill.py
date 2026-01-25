@@ -10,7 +10,7 @@ from io import BytesIO
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm, mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from reportlab.pdfgen import canvas as pdf_canvas
@@ -34,6 +34,13 @@ def build_recipient_invoice_with_qr_bill(
     is_preview: bool = False,
     payment_message: str | None = None,
     reference: str | None = None,
+    creditor_iban: str | None = None,
+    creditor_name: str | None = None,
+    creditor_street: str | None = None,
+    creditor_house_num: str | None = None,
+    creditor_postal_code: str | None = None,
+    creditor_city: str | None = None,
+    creditor_country: str | None = None,
 ) -> BytesIO:
     """
     Build a recipient invoice PDF with Swiss QR Bill payment section.
@@ -63,7 +70,7 @@ def build_recipient_invoice_with_qr_bill(
     """
     buffer = BytesIO()
     
-    # Calculate bottom margin to accommodate QR bill (105mm + 5mm safety)
+    # Reserve space for the QR bill only on the final page.
     qr_bill_height = 105 * mm + 5 * mm
     
     doc = SimpleDocTemplate(
@@ -72,7 +79,7 @@ def build_recipient_invoice_with_qr_bill(
         rightMargin=2 * cm,
         leftMargin=2 * cm,
         topMargin=2 * cm,
-        bottomMargin=qr_bill_height,  # Reserve space for QR bill
+        bottomMargin=2 * cm,
     )
     
     styles = getSampleStyleSheet()
@@ -99,14 +106,26 @@ def build_recipient_invoice_with_qr_bill(
     elements.append(Spacer(1, 12))
     
     # Delivery table
+    table_text_style = ParagraphStyle(
+        "table_text",
+        parent=styles["Normal"],
+        fontSize=8,
+        leading=9,
+    )
+    table_header_style = ParagraphStyle(
+        "table_header",
+        parent=styles["Normal"],
+        fontSize=8,
+        leading=9,
+    )
     table_data = [
         [
-            "Date",
-            "Commerce",
-            "Client",
-            "Commune partenaire",
-            "Sacs",
-            "Montant du (CHF)",
+            Paragraph("<b>Date</b>", table_header_style),
+            Paragraph("<b>Commerce</b>", table_header_style),
+            Paragraph("<b>Client</b>", table_header_style),
+            Paragraph("<b>Commune partenaire</b>", table_header_style),
+            Paragraph("<b>Sacs</b>", table_header_style),
+            Paragraph("<b>Montant du (CHF)</b>", table_header_style),
         ]
     ]
     
@@ -126,22 +145,34 @@ def build_recipient_invoice_with_qr_bill(
         table_data.append(
             [
                 delivery_date.strftime("%d.%m.%Y"),
-                shop_name or "",
-                client_name or "",
-                commune_name or "",
-                bags or 0,
+                Paragraph(shop_name or "", table_text_style),
+                Paragraph(client_name or "", table_text_style),
+                Paragraph(commune_name or "", table_text_style),
+                str(bags or 0),
                 f"{due_value:.2f}",
             ]
         )
-    
-    table = Table(table_data, repeatRows=1)
+
+    table_col_widths = [
+        doc.width * 0.14,
+        doc.width * 0.30,
+        doc.width * 0.20,
+        doc.width * 0.18,
+        doc.width * 0.06,
+        doc.width * 0.12,
+    ]
+    table = Table(table_data, repeatRows=1, colWidths=table_col_widths)
     table.setStyle(
         TableStyle(
             [
                 ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
                 ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
                 ("ALIGN", (4, 1), (-1, -1), "RIGHT"),
-                ("FONT", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
             ]
         )
     )
@@ -213,23 +244,31 @@ def build_recipient_invoice_with_qr_bill(
         )
     
     # Build main content
-    def add_qr_bill(canvas, doc):
-        """Add Swiss QR Bill to the bottom of each page."""
+    def add_qr_bill(canvas):
+        """Add Swiss QR Bill to the bottom of the final page."""
+        iban = creditor_iban or settings.BILLING_CREDITOR_IBAN
+        name = creditor_name or settings.BILLING_CREDITOR_NAME
+        street = creditor_street or settings.BILLING_CREDITOR_STREET
+        house_num = creditor_house_num or settings.BILLING_CREDITOR_HOUSE_NUM
+        postal_code = creditor_postal_code or settings.BILLING_CREDITOR_POSTAL_CODE
+        city = creditor_city or settings.BILLING_CREDITOR_CITY
+        country = creditor_country or settings.BILLING_CREDITOR_COUNTRY
+
         # Only add QR bill if we have creditor details configured
-        if not settings.BILLING_CREDITOR_IBAN or not settings.BILLING_CREDITOR_NAME:
+        if not iban or not name:
             return
         
         render_swiss_qr_bill(
             canvas,
             y_position=0,  # Bottom of page
             # Creditor
-            creditor_iban=settings.BILLING_CREDITOR_IBAN,
-            creditor_name=settings.BILLING_CREDITOR_NAME,
-            creditor_street=settings.BILLING_CREDITOR_STREET,
-            creditor_house_num=settings.BILLING_CREDITOR_HOUSE_NUM,
-            creditor_postal_code=settings.BILLING_CREDITOR_POSTAL_CODE or "",
-            creditor_city=settings.BILLING_CREDITOR_CITY or "",
-            creditor_country=settings.BILLING_CREDITOR_COUNTRY,
+            creditor_iban=iban,
+            creditor_name=name,
+            creditor_street=street,
+            creditor_house_num=house_num,
+            creditor_postal_code=postal_code or "",
+            creditor_city=city or "",
+            creditor_country=country,
             # Debtor
             debtor_name=recipient_name,
             debtor_street=recipient_street,
@@ -244,7 +283,26 @@ def build_recipient_invoice_with_qr_bill(
             message=payment_message or f"Facturation DringDring {period_month.strftime('%Y-%m')}",
             language="fr",
         )
-    
-    doc.build(elements, onFirstPage=add_qr_bill, onLaterPages=add_qr_bill)
+
+    class _QrBillCanvas(pdf_canvas.Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._saved_page_states = []
+
+        def showPage(self):
+            self._saved_page_states.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            total_pages = len(self._saved_page_states)
+            for page_number, state in enumerate(self._saved_page_states, start=1):
+                self.__dict__.update(state)
+                if page_number == total_pages:
+                    add_qr_bill(self)
+                super().showPage()
+            super().save()
+
+    elements.append(Spacer(1, qr_bill_height))
+    doc.build(elements, canvasmaker=_QrBillCanvas)
     buffer.seek(0)
     return buffer

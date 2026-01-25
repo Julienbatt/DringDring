@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_KEY: str
     BILLING_CREDITOR_NAME: str | None = None
     BILLING_CREDITOR_IBAN: str | None = None
+    BILLING_CREDITOR_ADDRESS: str | None = None
     # Structured address for Swiss QR Bill compliance
     BILLING_CREDITOR_STREET: str | None = None
     BILLING_CREDITOR_HOUSE_NUM: str | None = None

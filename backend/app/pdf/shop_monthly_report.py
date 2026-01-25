@@ -8,6 +8,8 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from app.pdf.logo import build_logo_flowables
+
 
 def build_shop_monthly_pdf(
     *,
@@ -19,6 +21,7 @@ def build_shop_monthly_pdf(
     frozen_by,
     frozen_by_name: str | None,
     deliveries: list[tuple],
+    is_preview: bool = False,
 ) -> BytesIO:
     buffer = BytesIO()
     doc = SimpleDocTemplate(
@@ -33,6 +36,7 @@ def build_shop_monthly_pdf(
     styles = getSampleStyleSheet()
     elements = []
 
+    elements.extend(build_logo_flowables())
     elements.append(Paragraph("<b>DringDring</b>", styles["Title"]))
     elements.append(
         Paragraph(
@@ -42,11 +46,14 @@ def build_shop_monthly_pdf(
     )
     elements.append(Spacer(1, 12))
 
-    elements.append(Paragraph(f"<b>Shop :</b> {shop_name}", styles["Normal"]))
+    elements.append(Paragraph(f"<b>Commerce :</b> {shop_name}", styles["Normal"]))
     elements.append(Paragraph(f"{shop_city}", styles["Normal"]))
     if hq_name:
         elements.append(Paragraph(f"<b>HQ :</b> {hq_name}", styles["Normal"]))
     elements.append(Spacer(1, 8))
+
+    status_label = "PERIODE NON GELEE (PREVIEW)" if is_preview else "PERIODE GELEE"
+    elements.append(Paragraph(f"<b>Statut :</b> {status_label}", styles["Normal"]))
 
     if frozen_at:
         frozen_at_text = frozen_at.strftime("%d.%m.%Y %H:%M")
@@ -72,16 +79,16 @@ def build_shop_monthly_pdf(
         [
             "Date",
             "Client",
-            "Ville",
+            "Commune partenaire",
             "Sacs",
             "Total CHF",
-            "Part shop",
-            "Part ville",
+            "Part entreprise regionale",
+            "Part commune",
         ]
     ]
 
     total_total = Decimal("0.00")
-    total_shop = Decimal("0.00")
+    total_admin_region = Decimal("0.00")
     total_city = Decimal("0.00")
     for (
         delivery_date,
@@ -89,7 +96,7 @@ def build_shop_monthly_pdf(
         city_name,
         bags,
         total_price,
-        share_shop,
+        share_admin_region,
         share_city,
     ) in deliveries:
         table_data.append(
@@ -99,13 +106,13 @@ def build_shop_monthly_pdf(
                 city_name or "",
                 bags,
                 f"{total_price:.2f}",
-                f"{share_shop:.2f}",
+                f"{share_admin_region:.2f}",
                 f"{share_city:.2f}",
             ]
         )
 
         total_total += Decimal(str(total_price))
-        total_shop += Decimal(str(share_shop))
+        total_admin_region += Decimal(str(share_admin_region))
         total_city += Decimal(str(share_city))
 
     table = Table(table_data, repeatRows=1)
@@ -128,20 +135,40 @@ def build_shop_monthly_pdf(
         Paragraph(f"Total facture : CHF {total_total:.2f}", styles["Normal"])
     )
     elements.append(
-        Paragraph(f"Total part shop : CHF {total_shop:.2f}", styles["Normal"])
+        Paragraph(
+            f"Total part entreprise regionale : CHF {total_admin_region:.2f}",
+            styles["Normal"],
+        )
     )
     elements.append(
-        Paragraph(f"Total part ville : CHF {total_city:.2f}", styles["Normal"])
+        Paragraph(f"Total part commune : CHF {total_city:.2f}", styles["Normal"])
     )
-    elements.append(Spacer(1, 24))
-
+    elements.append(Spacer(1, 16))
     elements.append(
         Paragraph(
-            "<i>Ce document est genere automatiquement par DringDring a partir "
-            "de donnees gelees. Toute modification ulterieure est impossible.</i>",
+            "Aucun montant n'est a regler par le commerce. "
+            "Les parts commune et entreprise regionale sont facturees separement.",
             styles["Italic"],
         )
     )
+    elements.append(Spacer(1, 24))
+
+    if is_preview:
+        elements.append(
+            Paragraph(
+                "<i>Document provisoire (periode non gelee). "
+                "Les montants peuvent evoluer.</i>",
+                styles["Italic"],
+            )
+        )
+    else:
+        elements.append(
+            Paragraph(
+                "<i>Ce document est genere automatiquement par DringDring a partir "
+                "de donnees gelees. Toute modification ulterieure est impossible.</i>",
+                styles["Italic"],
+            )
+        )
 
     doc.build(elements)
     buffer.seek(0)

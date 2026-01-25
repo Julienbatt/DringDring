@@ -1,19 +1,73 @@
-﻿const API_URL = process.env.NEXT_PUBLIC_API_URL;
-console.log("API_URL (frontend) =", API_URL);
+import { createClient } from '@/lib/supabase/client'
 
-export async function apiGet<T>(path: string, token?: string): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
-    headers: token
-      ? { Authorization: `Bearer ${token}` }
-      : undefined,
-  });
+export const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8016/api/v1')
+  .trim()
+  .replace(/\/+$/, '')
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API error ${res.status}: ${text}`);
+async function refreshAccessToken(): Promise<string | null> {
+  if (typeof window === 'undefined') {
+    return null
+  }
+  const supabase = createClient()
+  const { data, error } = await supabase.auth.refreshSession()
+  if (error) {
+    return null
+  }
+  return data.session?.access_token || null
+}
+
+async function requestJson<T>(
+  path: string,
+  options: RequestInit,
+  token?: string
+): Promise<T> {
+  const headers = {
+    ...(options.headers || {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }
 
-  return res.json();
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE_URL}${path}`, { ...options, headers })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`API fetch failed (${API_BASE_URL}${path}): ${message}`)
+  }
+
+  if (res.status === 401 && token) {
+    const refreshed = await refreshAccessToken()
+    if (refreshed) {
+      try {
+        res = await fetch(`${API_BASE_URL}${path}`, {
+          ...options,
+          headers: {
+            ...headers,
+            Authorization: `Bearer ${refreshed}`,
+          },
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        throw new Error(`API fetch failed (${API_BASE_URL}${path}): ${message}`)
+      }
+    }
+  }
+
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`API error ${res.status}: ${text}`)
+  }
+
+  return res.json()
+}
+
+export async function apiGet<T>(path: string, token?: string): Promise<T> {
+  return requestJson<T>(
+    path,
+    {
+      method: 'GET',
+    },
+    token
+  )
 }
 
 export async function apiPost<T>(
@@ -21,19 +75,73 @@ export async function apiPost<T>(
   body: unknown,
   token?: string
 ): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  return requestJson<T>(
+    path,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API error ${res.status}: ${text}`);
-  }
-
-  return res.json();
+    token
+  )
 }
+
+export async function apiPut<T>(
+  path: string,
+  body: unknown,
+  token?: string
+): Promise<T> {
+  return requestJson<T>(
+    path,
+    {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    },
+    token
+  )
+}
+
+
+export async function apiDelete<T>(
+  path: string,
+  token?: string
+): Promise<T> {
+  return requestJson<T>(
+    path,
+    {
+      method: 'DELETE',
+    },
+    token
+  )
+}
+
+export async function apiPatch<T>(
+  path: string,
+  body: unknown,
+  token?: string
+): Promise<T> {
+  return requestJson<T>(
+    path,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    },
+    token
+  )
+}
+
+export const api = {
+  get: apiGet,
+  post: apiPost,
+  put: apiPut,
+  patch: apiPatch,
+  delete: apiDelete,
+};

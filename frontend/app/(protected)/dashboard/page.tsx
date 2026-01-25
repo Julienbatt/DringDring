@@ -7,6 +7,7 @@ import HqReport from '../reports/components/HqReport'
 import CourierDashboard from './components/CourierDashboard'
 import CustomerDashboard from './components/CustomerDashboard'
 import AdminRegionDashboard from './components/AdminRegionDashboard'
+import SuperAdminDashboard from './components/SuperAdminDashboard'
 import { useMe } from '../hooks/useMe'
 
 function DashboardContent() {
@@ -38,8 +39,7 @@ function DashboardContent() {
     case 'admin_region':
       return <AdminRegionDashboard />
     case 'super_admin':
-      // Super admin falls back to admin view for now, or could have a specific one
-      return <AdminRegionDashboard />
+      return <SuperAdminDashboard />
     default:
       return (
         <div className="p-8 text-sm text-gray-600">

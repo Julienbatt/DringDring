@@ -8,7 +8,7 @@ def validate_tariff_rule(rule_type: str, rule: dict, share: dict | None = None) 
     if not isinstance(rule, dict):
         raise HTTPException(status_code=400, detail="Invalid tariff rule format")
 
-    if rule_type == "bags":
+    if rule_type == "bags" or rule_type == "bags_price":
         _validate_bags_rule(rule, share or {})
         return
     if rule_type == "order_amount":
@@ -23,9 +23,11 @@ def validate_tariff_rule(rule_type: str, rule: dict, share: dict | None = None) 
 
 def _validate_bags_rule(rule: dict, share: dict) -> None:
     pricing = rule.get("pricing") if isinstance(rule.get("pricing"), dict) else rule
-    required_keys = {"price_per_2_bags", "cms_discount"}
-    missing = required_keys - set(pricing.keys())
-    if missing:
+    # Support aliases: price_per_2_bags OR amount_per_bag OR price_per_bag
+    has_price = any(k in pricing for k in ["price_per_2_bags", "amount_per_bag", "price_per_bag"])
+    has_discount = "cms_discount" in pricing
+    
+    if not has_price or not has_discount:
         raise HTTPException(
             status_code=400,
             detail="Invalid tariff rule: missing pricing keys",
@@ -33,7 +35,9 @@ def _validate_bags_rule(rule: dict, share: dict) -> None:
 
     _validate_shares(rule, share)
 
-    price_per_2_bags = Decimal(str(pricing["price_per_2_bags"]))
+    # Read price with fallback
+    price_val = pricing.get("price_per_2_bags", pricing.get("price_per_bag", pricing.get("amount_per_bag", 0)))
+    price_per_2_bags = Decimal(str(price_val))
     cms_discount = Decimal(str(pricing["cms_discount"]))
     if price_per_2_bags < 0:
         raise HTTPException(status_code=400, detail="Invalid price_per_2_bags")
@@ -47,6 +51,26 @@ def _validate_bags_rule(rule: dict, share: dict) -> None:
 
 def _validate_order_amount_rule(rule: dict, share: dict) -> None:
     pricing = rule.get("pricing") if isinstance(rule.get("pricing"), dict) else rule
+    thresholds = pricing.get("thresholds")
+    if isinstance(thresholds, list) and thresholds:
+        _validate_shares(rule, share)
+
+        for threshold in thresholds:
+            t_min = Decimal(str(threshold.get("min", 0)))
+            t_max_raw = threshold.get("max")
+            t_price = Decimal(str(threshold.get("price", 0)))
+
+            if t_min < 0:
+                raise HTTPException(status_code=400, detail="Invalid threshold min")
+            if t_price < 0:
+                raise HTTPException(status_code=400, detail="Invalid threshold price")
+            if t_max_raw is not None:
+                t_max = Decimal(str(t_max_raw))
+                if t_max < t_min:
+                    raise HTTPException(status_code=400, detail="Invalid threshold max")
+
+        return
+
     if "percent_of_order" not in pricing:
         raise HTTPException(
             status_code=400,
@@ -71,18 +95,27 @@ def _validate_shares(rule: dict, share: dict) -> None:
     shares = shares or share
     
     # [NEW] Strict validation: Check for unknown keys
-    required_shares = {"client", "shop", "city", "admin_region"}
-    unknown_keys = set(shares.keys()) - required_shares
+    # We expect either 'admin_region' or 'velocite' (legacy)
+    known_keys = {"client", "shop", "city", "admin_region", "velocite"}
+    unknown_keys = set(shares.keys()) - known_keys
     if unknown_keys:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid tariff rule: unknown share keys {unknown_keys}",
         )
 
-    if not required_shares.issubset(shares):
-        raise HTTPException(
+    # Required: client, shop, city AND (admin_region OR velocite)
+    base_required = {"client", "shop", "city"}
+    if not base_required.issubset(shares):
+         raise HTTPException(
             status_code=400,
-            detail="Invalid tariff rule: missing share keys",
+            detail="Invalid tariff rule: missing base share keys (client, shop, city)",
+        )
+    
+    if "admin_region" not in shares and "velocite" not in shares:
+         raise HTTPException(
+            status_code=400,
+            detail="Invalid tariff rule: missing admin share (admin_region or velocite)",
         )
 
     total = Decimal("0")

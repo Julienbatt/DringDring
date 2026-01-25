@@ -1,0 +1,30 @@
+-- Seed Swiss cantons (idempotent)
+INSERT INTO public.canton (name, code)
+VALUES
+  ('Zurich', 'ZH'),
+  ('Berne', 'BE'),
+  ('Lucerne', 'LU'),
+  ('Uri', 'UR'),
+  ('Schwytz', 'SZ'),
+  ('Obwald', 'OW'),
+  ('Nidwald', 'NW'),
+  ('Glaris', 'GL'),
+  ('Zoug', 'ZG'),
+  ('Fribourg', 'FR'),
+  ('Soleure', 'SO'),
+  ('Bale-Ville', 'BS'),
+  ('Bale-Campagne', 'BL'),
+  ('Schaffhouse', 'SH'),
+  ('Appenzell Rhodes-Exterieures', 'AR'),
+  ('Appenzell Rhodes-Interieures', 'AI'),
+  ('Saint-Gall', 'SG'),
+  ('Grisons', 'GR'),
+  ('Argovie', 'AG'),
+  ('Thurgovie', 'TG'),
+  ('Tessin', 'TI'),
+  ('Vaud', 'VD'),
+  ('Valais', 'VS'),
+  ('Neuchatel', 'NE'),
+  ('Geneve', 'GE'),
+  ('Jura', 'JU')
+ON CONFLICT (code) DO NOTHING;

@@ -9,12 +9,17 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from app.pdf.logo import build_logo_flowables
+from app.pdf.payment_details import build_payment_flowables
+
 
 def build_city_monthly_pdf(
     *,
     city_name: str,
     period_month: date,
     rows: list[tuple],
+    vat_rate: Decimal | int | float | str | None = None,
+    is_preview: bool = False,
 ) -> BytesIO:
     buffer = BytesIO()
     doc = SimpleDocTemplate(
@@ -29,10 +34,11 @@ def build_city_monthly_pdf(
     styles = getSampleStyleSheet()
     elements: list = []
 
+    elements.extend(build_logo_flowables())
     elements.append(Paragraph("<b>DringDring</b>", styles["Title"]))
     elements.append(
         Paragraph(
-            f"<b>Facturation mensuelle - Ville de {city_name}</b>",
+            f"<b>Facturation mensuelle - Commune partenaire de {city_name}</b>",
             styles["Heading2"],
         )
     )
@@ -42,34 +48,30 @@ def build_city_monthly_pdf(
             styles["Normal"],
         )
     )
+    status_label = "PERIODE NON GELEE (PREVIEW)" if is_preview else "PERIODE GELEE"
+    elements.append(Paragraph(f"<b>Statut :</b> {status_label}", styles["Normal"]))
     elements.append(Spacer(1, 12))
 
     grouped: dict[str, list[tuple]] = defaultdict(list)
     for row in rows:
         grouped[str(row[0])].append(row)
 
-    total_city = Decimal("0.00")
-    total_shop = Decimal("0.00")
     total_city_share = Decimal("0.00")
 
     for shop_rows in grouped.values():
         shop_name = shop_rows[0][1] or ""
-        elements.append(Paragraph(f"<b>Shop : {shop_name}</b>", styles["Heading3"]))
+        elements.append(Paragraph(f"<b>Commerce : {shop_name}</b>", styles["Heading3"]))
 
         table_data = [
             [
                 "Date",
                 "Client",
-                "Ville",
+                "Commune partenaire",
                 "Sacs",
-                "Total CHF",
-                "Part ville",
-                "Part shop",
+                "Part commune (CHF)",
             ]
         ]
 
-        subtotal_total = Decimal("0.00")
-        subtotal_shop = Decimal("0.00")
         subtotal_city = Decimal("0.00")
 
         for (
@@ -81,10 +83,8 @@ def build_city_monthly_pdf(
             bags,
             total_price,
             share_city,
-            share_shop,
+            share_admin_region,
         ) in shop_rows:
-            subtotal_total += Decimal(str(total_price))
-            subtotal_shop += Decimal(str(share_shop))
             subtotal_city += Decimal(str(share_city))
 
             table_data.append(
@@ -93,9 +93,7 @@ def build_city_monthly_pdf(
                     client_name or "",
                     city_label or "",
                     bags,
-                    f"{Decimal(str(total_price)):.2f}",
                     f"{Decimal(str(share_city)):.2f}",
-                    f"{Decimal(str(share_shop)):.2f}",
                 ]
             )
 
@@ -115,35 +113,49 @@ def build_city_monthly_pdf(
 
         elements.append(
             Paragraph(
-                f"Sous-total {shop_name} : CHF {subtotal_total:.2f}",
+                f"Sous-total {shop_name} : CHF {subtotal_city:.2f}",
                 styles["Normal"],
             )
         )
         elements.append(Spacer(1, 12))
 
-        total_city += subtotal_total
-        total_shop += subtotal_shop
         total_city_share += subtotal_city
 
     elements.append(Spacer(1, 6))
-    elements.append(Paragraph("<b>Totaux ville</b>", styles["Heading3"]))
-    elements.append(
-        Paragraph(f"Total facturation : CHF {total_city:.2f}", styles["Normal"])
-    )
-    elements.append(
-        Paragraph(f"Total part ville : CHF {total_city_share:.2f}", styles["Normal"])
-    )
-    elements.append(
-        Paragraph(f"Total part shop : CHF {total_shop:.2f}", styles["Normal"])
-    )
-    elements.append(Spacer(1, 18))
+    elements.append(Paragraph("<b>Totaux commune</b>", styles["Heading3"]))
     elements.append(
         Paragraph(
-            "<i>Ce document est genere automatiquement par DringDring a partir "
-            "de donnees gelees. Toute modification ulterieure est impossible.</i>",
-            styles["Italic"],
+            f"Montant facture commune : CHF {total_city_share:.2f}",
+            styles["Normal"],
         )
     )
+    elements.append(Spacer(1, 18))
+    elements.extend(
+        build_payment_flowables(
+            amount=total_city_share,
+            vat_rate=vat_rate,
+            debtor_name=f"Commune partenaire de {city_name}",
+            debtor_city=city_name,
+            message=f"Facturation DringDring {period_month.strftime('%Y-%m')}",
+            styles=styles,
+        )
+    )
+    if is_preview:
+        elements.append(
+            Paragraph(
+                "<i>Document provisoire (periode non gelee). "
+                "Les montants peuvent evoluer.</i>",
+                styles["Italic"],
+            )
+        )
+    else:
+        elements.append(
+            Paragraph(
+                "<i>Ce document est genere automatiquement par DringDring a partir "
+                "de donnees gelees. Toute modification ulterieure est impossible.</i>",
+                styles["Italic"],
+            )
+        )
 
     doc.build(elements)
     buffer.seek(0)
