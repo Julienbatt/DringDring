@@ -241,6 +241,13 @@ supporter de nouveaux modèles tarifaires,
 
 s’adapter à d’autres cadres légaux ou pays.
 
+## Implementation note (2026-01-22)
+- Billing documents live in `billing_run`, `billing_document`, `billing_document_line`.
+- Recipient types: `COMMUNE`, `HQ`, `SHOP_INDEP`, `INTERNAL`.
+- External invoices use admin_region `billing_*` as the creditor (regional billing form).
+- Internal invoice uses admin_region `internal_billing_*` as the creditor; recipient is the regional billing entity; amount is full `total_price`.
+- PDFs are frozen on preview=0 and stored in `billing-pdf` with `pdf_url`, `pdf_sha256`, `pdf_generated_at`.
+
 9. Conclusion
 
 La tarification dans DringDring est :

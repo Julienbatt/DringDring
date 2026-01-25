@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { Download, FileText } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Calendar, ChevronLeft, ChevronRight, Download, FileText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
     Table,
@@ -19,7 +19,7 @@ import { useAuth } from '@/app/(protected)/providers/AuthProvider'
 
 type BillingDocument = {
     id: string
-    recipient_type: 'COMMUNE' | 'HQ' | 'SHOP_INDEP'
+    recipient_type: 'COMMUNE' | 'HQ' | 'SHOP_INDEP' | 'INTERNAL'
     recipient_id: string
     recipient_name: string
     period_month: string
@@ -39,7 +39,7 @@ type BillingData = {
 type BillingLine = {
     id: string
     document_id: string
-    recipient_type: 'COMMUNE' | 'HQ' | 'SHOP_INDEP'
+    recipient_type: 'COMMUNE' | 'HQ' | 'SHOP_INDEP' | 'INTERNAL'
     recipient_id: string
     shop_id: string | null
     delivery_id: string | null
@@ -50,6 +50,43 @@ type BillingLine = {
     bags: string | null
     shop_name: string | null
 }
+
+const recipientTypeLabels = {
+    COMMUNE: 'Commune',
+    HQ: 'HQ',
+    SHOP_INDEP: 'Commerce independant',
+    INTERNAL: 'Interne',
+} as const
+
+const MONTH_LABELS = [
+    'Janvier',
+    'Fevrier',
+    'Mars',
+    'Avril',
+    'Mai',
+    'Juin',
+    'Juillet',
+    'Aout',
+    'Septembre',
+    'Octobre',
+    'Novembre',
+    'Decembre',
+]
+
+const MONTH_SHORT_LABELS = [
+    'Janv',
+    'Fevr',
+    'Mars',
+    'Avr',
+    'Mai',
+    'Juin',
+    'Juil',
+    'Aout',
+    'Sept',
+    'Oct',
+    'Nov',
+    'Dec',
+]
 
 function getCurrentMonth() {
     const now = new Date()
@@ -66,16 +103,37 @@ export default function BillingPage() {
     const [loading, setLoading] = useState(false)
     const [detailLoading, setDetailLoading] = useState(false)
     const [refreshing, setRefreshing] = useState(false)
-    const [selectedRecipientId, setSelectedRecipientId] = useState<string>('all')
-    const [activeTab, setActiveTab] = useState<'independent' | 'hq' | 'communes'>('independent')
+    const [monthPickerOpen, setMonthPickerOpen] = useState(false)
+    const [pickerYear, setPickerYear] = useState(() => Number(getCurrentMonth().split('-')[0]))
+    const [externalFilter, setExternalFilter] = useState<'ALL' | 'COMMUNE' | 'HQ' | 'SHOP_INDEP'>('ALL')
+    const [selectedRecipientKey, setSelectedRecipientKey] = useState<string>('all')
     const [previewMode, setPreviewMode] = useState(true)
     const [vatRate, setVatRate] = useState<number | null>(null)
+    const monthPickerRef = useRef<HTMLDivElement | null>(null)
 
     useEffect(() => {
         loadData()
         loadDetails()
         loadVatRate()
     }, [selectedMonth, adminContextRegion])
+
+    useEffect(() => {
+        const [year] = selectedMonth.split('-')
+        setPickerYear(Number(year))
+    }, [selectedMonth])
+
+    useEffect(() => {
+        if (!monthPickerOpen) return
+        const handleClick = (event: MouseEvent) => {
+            if (!monthPickerRef.current) return
+            if (!monthPickerRef.current.contains(event.target as Node)) {
+                setMonthPickerOpen(false)
+            }
+        }
+        document.addEventListener('mousedown', handleClick)
+        return () => document.removeEventListener('mousedown', handleClick)
+    }, [monthPickerOpen])
+
 
     const loadData = async () => {
         setLoading(true)
@@ -170,7 +228,7 @@ export default function BillingPage() {
         }
     }
 
-    const handleExport = async (recipientType?: string) => {
+    const handleExport = async (recipientType?: string, recipientId?: string, recipientName?: string) => {
         try {
             const supabase = createClient()
             const { data: { session } } = await supabase.auth.getSession()
@@ -179,7 +237,9 @@ export default function BillingPage() {
             const apiBase = API_BASE_URL
             const queryParams = adminContextRegion ? `&admin_region_id=${adminContextRegion.id}` : ''
             const typeParam = recipientType ? `&recipient_type=${recipientType}` : ''
-            const response = await fetch(`${apiBase}/billing/documents/export?month=${selectedMonth}${queryParams}${typeParam}`, {
+            const recipientParam = recipientId ? `&recipient_id=${recipientId}` : ''
+            const detailParam = '&detail=1'
+            const response = await fetch(`${apiBase}/billing/documents/export?month=${selectedMonth}${queryParams}${typeParam}${recipientParam}${detailParam}`, {
                 headers: { Authorization: `Bearer ${session.access_token}` }
             })
 
@@ -189,7 +249,8 @@ export default function BillingPage() {
             const url = window.URL.createObjectURL(blob)
             const a = document.createElement('a')
             a.href = url
-            a.download = `facturation-documents-${selectedMonth}.csv`
+            const safeName = (recipientName || recipientType || 'documents').replace(/[^a-zA-Z0-9_-]+/g, '_')
+            a.download = `facturation-details-${safeName}-${selectedMonth}.csv`
             document.body.appendChild(a)
             a.click()
             a.remove()
@@ -285,112 +346,199 @@ export default function BillingPage() {
         }
     }
 
+    const [selectedYear, selectedMonthIndex] = selectedMonth
+        .split('-')
+        .map((value, index) => (index === 0 ? Number(value) : Number(value) - 1)) as [number, number]
+
+    const formatMonthLabel = (year: number, monthIndex: number) => {
+        const label = MONTH_LABELS[monthIndex] || ''
+        return `${label} ${year}`
+    }
+
+    const getMonthValue = (year: number, monthIndex: number) => {
+        const monthValue = String(monthIndex + 1).padStart(2, '0')
+        return `${year}-${monthValue}`
+    }
+
+    const stepMonth = (delta: number) => {
+        const date = new Date(selectedYear, selectedMonthIndex + delta, 1)
+        const nextValue = getMonthValue(date.getFullYear(), date.getMonth())
+        setSelectedMonth(nextValue)
+    }
+
     const documents = data?.rows ?? []
-    const independentRows = documents.filter((row) => row.recipient_type === 'SHOP_INDEP')
-    const hqRows = documents.filter((row) => row.recipient_type === 'HQ')
-    const communeRows = documents.filter((row) => row.recipient_type === 'COMMUNE')
-    const activeRecipients =
-        activeTab === 'communes' ? communeRows : activeTab === 'hq' ? hqRows : independentRows
+    const externalDocuments = documents.filter((row) => row.recipient_type !== 'INTERNAL')
+    const internalDocuments = documents.filter((row) => row.recipient_type === 'INTERNAL')
+    const filteredExternalDocuments =
+        externalFilter === 'ALL'
+            ? externalDocuments
+            : externalDocuments.filter((row) => row.recipient_type === externalFilter)
 
-    const summaryVolume =
-        activeTab === 'communes'
-            ? communeRows.reduce((acc, row) => acc + (Number(row.amount_ttc) || 0), 0)
-            : activeTab === 'hq'
-                ? hqRows.reduce((acc, row) => acc + (Number(row.amount_ttc) || 0), 0)
-                : independentRows.reduce((acc, row) => acc + (Number(row.amount_ttc) || 0), 0)
-
-    const summaryDeliveries =
-        activeTab === 'communes'
-            ? communeRows.reduce((acc, row) => acc + (row.deliveries || 0), 0)
-            : activeTab === 'hq'
-                ? hqRows.reduce((acc, row) => acc + (row.deliveries || 0), 0)
-                : independentRows.reduce((acc, row) => acc + (row.deliveries || 0), 0)
-
-    const summaryCount =
-        activeTab === 'communes'
-            ? communeRows.length
-            : activeTab === 'hq'
-                ? hqRows.length
-                : independentRows.length
+    const filteredExternalAmount = filteredExternalDocuments.reduce((acc, row) => acc + (Number(row.amount_ttc) || 0), 0)
+    const filteredExternalDeliveries = filteredExternalDocuments.reduce((acc, row) => acc + (row.deliveries || 0), 0)
 
     const vatRateValue = vatRate ?? 0.081
-    const totalBilledTtc = documents.reduce((sum, row) => sum + Number(row.amount_ttc || 0), 0)
-    const totalBilledHt = documents.reduce((sum, row) => sum + Number(row.amount_ht || 0), 0)
-    const totalBilledVat = documents.reduce((sum, row) => sum + Number(row.amount_vat || 0), 0)
+    const totalBilledTtc = externalDocuments.reduce((sum, row) => sum + Number(row.amount_ttc || 0), 0)
+    const totalBilledHt = externalDocuments.reduce((sum, row) => sum + Number(row.amount_ht || 0), 0)
+    const totalBilledVat = externalDocuments.reduce((sum, row) => sum + Number(row.amount_vat || 0), 0)
 
-    const tableColSpan = 5
-    const visibleDetails = details.filter((row) => {
-        if (activeTab === 'communes' && row.recipient_type !== 'COMMUNE') return false
-        if (activeTab === 'hq' && row.recipient_type !== 'HQ') return false
-        if (activeTab === 'independent' && row.recipient_type !== 'SHOP_INDEP') return false
-        if (selectedRecipientId === 'all') return true
-        return row.recipient_id === selectedRecipientId
+    const externalDetails = details.filter((row) => row.recipient_type !== 'INTERNAL')
+    const visibleDetails = externalDetails.filter((row) => {
+        if (externalFilter !== 'ALL' && row.recipient_type !== externalFilter) return false
+        if (selectedRecipientKey === 'all') return true
+        const [selectedType, selectedId] = selectedRecipientKey.split(':')
+        return row.recipient_type === selectedType && row.recipient_id === selectedId
     })
+
+    const handleInternalPdf = () => {
+        const internalDoc = internalDocuments[0]
+        if (!internalDoc) {
+            toast.info('Aucun document interne pour cette periode.')
+            return
+        }
+        handleDownloadPdf(internalDoc.id, internalDoc.recipient_name)
+    }
 
     return (
         <div className="p-8 space-y-6">
-            <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight">Facturation regionale</h1>
                     <p className="text-muted-foreground">Gestion des clotures mensuelles</p>
                 </div>
 
-                <div className="flex items-center gap-2">
-                    <input
-                        type="month"
-                        className="border rounded px-3 py-2 text-sm"
-                        value={selectedMonth}
-                        onChange={(e) => setSelectedMonth(e.target.value)}
-                    />
-                    <label className="flex items-center gap-2 rounded border px-3 py-2 text-xs text-slate-600">
-                        <input
-                            type="checkbox"
-                            checked={previewMode}
-                            onChange={(e) => setPreviewMode(e.target.checked)}
-                        />
-                        Mode preview (sans gel)
-                    </label>
-                    <Button
-                        variant="outline"
-                        onClick={() => handleExport(
-                            activeTab === 'communes'
-                                ? 'COMMUNE'
-                                : activeTab === 'hq'
-                                    ? 'HQ'
-                                    : 'SHOP_INDEP'
-                        )}
-                    >
-                        <Download className="mr-2 h-4 w-4" />
-                        Export CSV
-                    </Button>
-                    <Button
-                        variant="outline"
-                        onClick={() => downloadZip('SHOP_INDEP', `factures-commerces-${selectedMonth}.zip`)}
-                    >
-                        <FileText className="mr-2 h-4 w-4" />
-                        PDF commerces independants (ZIP)
-                    </Button>
-                    <Button
-                        variant="outline"
-                        onClick={() => downloadZip('HQ', `factures-hq-${selectedMonth}.zip`)}
-                    >
-                        <FileText className="mr-2 h-4 w-4" />
-                        PDF HQ (ZIP)
-                    </Button>
-                    <Button
-                        variant="outline"
-                        onClick={() => downloadZip('COMMUNE', `factures-communes-${selectedMonth}.zip`)}
-                    >
-                        <FileText className="mr-2 h-4 w-4" />
-                        PDF communes & zones (ZIP)
-                    </Button>
-                    <Button
-                        onClick={handleRefresh}
-                        disabled={loading || refreshing}
-                        variant="default"
-                    >
-                        {refreshing ? 'Recalcul...' : 'Recalculer la facturation'}
-                    </Button>
+                <div className="flex w-full flex-col gap-3 xl:w-auto xl:items-end">
+                    <div className="flex w-full flex-wrap items-center justify-between gap-3 xl:justify-end">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <div className="relative" ref={monthPickerRef}>
+                                <div className="flex items-center gap-1 rounded-full border bg-white px-1.5 py-1 shadow-sm">
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon-sm"
+                                        onClick={() => stepMonth(-1)}
+                                        aria-label="Mois precedent"
+                                    >
+                                        <ChevronLeft className="h-4 w-4" />
+                                    </Button>
+                                    <button
+                                        type="button"
+                                        className="flex items-center gap-2 rounded-full px-3 py-1 text-sm font-medium text-slate-900 hover:bg-slate-100"
+                                        onClick={() => setMonthPickerOpen((prev) => !prev)}
+                                    >
+                                        <Calendar className="h-4 w-4 text-slate-500" />
+                                        <span>{formatMonthLabel(selectedYear, selectedMonthIndex)}</span>
+                                    </button>
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon-sm"
+                                        onClick={() => stepMonth(1)}
+                                        aria-label="Mois suivant"
+                                    >
+                                        <ChevronRight className="h-4 w-4" />
+                                    </Button>
+                                </div>
+                                {monthPickerOpen ? (
+                                    <div className="absolute z-20 mt-2 w-[260px] rounded-xl border bg-white p-3 shadow-lg">
+                                        <div className="flex items-center justify-between">
+                                            <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="icon-sm"
+                                                onClick={() => setPickerYear((prev) => prev - 1)}
+                                                aria-label="Annee precedente"
+                                            >
+                                                <ChevronLeft className="h-4 w-4" />
+                                            </Button>
+                                            <div className="text-sm font-semibold">{pickerYear}</div>
+                                            <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="icon-sm"
+                                                onClick={() => setPickerYear((prev) => prev + 1)}
+                                                aria-label="Annee suivante"
+                                            >
+                                                <ChevronRight className="h-4 w-4" />
+                                            </Button>
+                                        </div>
+                                        <div className="mt-2 grid grid-cols-3 gap-2">
+                                            {MONTH_SHORT_LABELS.map((label, index) => {
+                                                const isSelected = pickerYear === selectedYear && index === selectedMonthIndex
+                                                return (
+                                                    <button
+                                                        key={`${pickerYear}-${index}`}
+                                                        type="button"
+                                                        className={`rounded-lg px-2 py-2 text-xs font-semibold transition-colors ${
+                                                            isSelected
+                                                                ? 'bg-emerald-500 text-white'
+                                                                : 'bg-slate-50 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700'
+                                                        }`}
+                                                        onClick={() => {
+                                                            setSelectedMonth(getMonthValue(pickerYear, index))
+                                                            setMonthPickerOpen(false)
+                                                        }}
+                                                    >
+                                                        {label}
+                                                    </button>
+                                                )
+                                            })}
+                                        </div>
+                                    </div>
+                                ) : null}
+                            </div>
+                            <label className="flex items-center gap-2 rounded border px-3 py-2 text-xs text-slate-600">
+                                <input
+                                    type="checkbox"
+                                    checked={previewMode}
+                                    onChange={(e) => setPreviewMode(e.target.checked)}
+                                />
+                                Mode preview (sans gel)
+                            </label>
+                        </div>
+                        <Button
+                            size="sm"
+                            onClick={handleRefresh}
+                            disabled={loading || refreshing}
+                            variant="default"
+                        >
+                            {refreshing ? 'Recalcul...' : 'Recalculer la facturation'}
+                        </Button>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Button size="sm" variant="outline" onClick={handleInternalPdf}>
+                                <FileText className="mr-2 h-4 w-4" />
+                                PDF Interne
+                            </Button>
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => downloadZip('HQ', `factures-hq-${selectedMonth}.zip`)}
+                            >
+                                <FileText className="mr-2 h-4 w-4" />
+                                PDF HQ
+                            </Button>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => downloadZip('COMMUNE', `factures-communes-${selectedMonth}.zip`)}
+                            >
+                                <FileText className="mr-2 h-4 w-4" />
+                                PDF Communes & zones
+                            </Button>
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => downloadZip('SHOP_INDEP', `factures-commerces-${selectedMonth}.zip`)}
+                            >
+                                <FileText className="mr-2 h-4 w-4" />
+                                PDF Commerces independants
+                            </Button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -417,72 +565,41 @@ export default function BillingPage() {
                 </div>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-3">
-                <div className="rounded-xl border bg-card text-card-foreground shadow p-6">
-                    <div className="text-sm font-medium text-muted-foreground">
-                        {activeTab === 'communes' ? 'Subvention totale' : 'Montant total'}
-                    </div>
-                    <div className="text-2xl font-bold">
-                        CHF {summaryVolume.toLocaleString('fr-CH', { minimumFractionDigits: 2 })}
-                    </div>
-                </div>
-                <div className="rounded-xl border bg-card text-card-foreground shadow p-6">
-                    <div className="text-sm font-medium text-muted-foreground">Livraisons</div>
-                    <div className="text-2xl font-bold">{summaryDeliveries}</div>
-                </div>
-                <div className="rounded-xl border bg-card text-card-foreground shadow p-6">
-                    <div className="text-sm font-medium text-muted-foreground">
-                        {activeTab === 'communes'
-                            ? 'Communes'
-                            : activeTab === 'hq'
-                                ? 'HQ'
-                                : 'Commerces independants'}
-                    </div>
-                    <div className="text-2xl font-bold">{summaryCount}</div>
-                </div>
-            </div>
-
             <div className="rounded-md border bg-white">
-                <div className="flex border-b border-gray-200">
-                    <button
-                        onClick={() => {
-                            setActiveTab('independent')
-                            setSelectedRecipientId('all')
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 px-4 py-3 border-b border-gray-200">
+                    <div>
+                        <div className="text-lg font-semibold">Factures externes</div>
+                        <div className="text-sm text-muted-foreground">
+                            Communes, HQ et commerces independants. Chaque payeur recoit sa facture.
+                        </div>
+                    </div>
+                    <select
+                        className="border rounded px-3 py-2 text-sm"
+                        value={externalFilter}
+                        onChange={(e) => {
+                            setExternalFilter(e.target.value as typeof externalFilter)
+                            setSelectedRecipientKey('all')
                         }}
-                        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'independent' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
                     >
-                        Commerces independants ({independentRows.length})
-                    </button>
-                    <button
-                        onClick={() => {
-                            setActiveTab('hq')
-                            setSelectedRecipientId('all')
-                        }}
-                        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'hq' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                    >
-                        HQ ({hqRows.length})
-                    </button>
-                    <button
-                        onClick={() => {
-                            setActiveTab('communes')
-                            setSelectedRecipientId('all')
-                        }}
-                        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'communes' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                    >
-                        Communes & zones ({communeRows.length})
-                    </button>
+                        <option value="ALL">Tous les payeurs externes</option>
+                        <option value="COMMUNE">Communes & zones</option>
+                        <option value="HQ">HQ</option>
+                        <option value="SHOP_INDEP">Commerces independants</option>
+                    </select>
+                </div>
+                <div className="flex flex-wrap gap-3 px-4 py-2 text-xs text-muted-foreground">
+                    <span>Payeurs: {filteredExternalDocuments.length}</span>
+                    <span>Livraisons: {filteredExternalDeliveries}</span>
+                    <span>
+                        Montant TTC: CHF {filteredExternalAmount.toLocaleString('fr-CH', { minimumFractionDigits: 2 })}
+                    </span>
                 </div>
                 <div className="table-scroll">
                     <Table className="min-w-[900px]">
                     <TableHeader>
                         <TableRow>
-                            <TableHead>
-                                {activeTab === 'communes'
-                                    ? 'Commune partenaire'
-                                    : activeTab === 'hq'
-                                        ? 'HQ'
-                                        : 'Commerce independant'}
-                            </TableHead>
+                            <TableHead>Type</TableHead>
+                            <TableHead>Payeur</TableHead>
                             <TableHead className="text-right">Livraisons</TableHead>
                             <TableHead className="text-right">Montant facture (TTC)</TableHead>
                             <TableHead className="text-center">Statut</TableHead>
@@ -492,70 +609,81 @@ export default function BillingPage() {
                     <TableBody>
                         {loading ? (
                             <TableRow>
-                                <TableCell colSpan={tableColSpan} className="h-24 text-center">Chargement...</TableCell>
+                                <TableCell colSpan={6} className="h-24 text-center">Chargement...</TableCell>
                             </TableRow>
-                        ) : activeTab === 'communes' ? (
-                            communeRows.length === 0 ? (
-                                <TableRow>
-                                    <TableCell colSpan={tableColSpan} className="h-24 text-center text-muted-foreground">Aucune donnee pour ce mois.</TableCell>
-                                </TableRow>
-                            ) : (
-                                communeRows.map((row) => (
-                                    <TableRow key={row.id}>
-                                        <TableCell className="font-medium">{row.recipient_name}</TableCell>
-                                        <TableCell className="text-right">{row.deliveries}</TableCell>
-                                        <TableCell className="text-right">
-                                            CHF {Number(row.amount_ttc).toLocaleString('fr-CH', { minimumFractionDigits: 2 })}
-                                        </TableCell>
-                                        <TableCell className="text-center">
-                                            <Badge variant="outline">En cours</Badge>
-                                        </TableCell>
-                                        <TableCell className="text-right">
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                onClick={() => handleDownloadPdf(row.id, row.recipient_name)}
-                                            >
-                                                <FileText className="h-4 w-4" />
-                                            </Button>
-                                        </TableCell>
-                                    </TableRow>
-                                ))
-                            )
-                        ) : activeTab === 'hq' ? (
-                            hqRows.length === 0 ? (
-                                <TableRow>
-                                    <TableCell colSpan={tableColSpan} className="h-24 text-center text-muted-foreground">Aucune donnee pour ce mois.</TableCell>
-                                </TableRow>
-                            ) : (
-                                hqRows.map((row) => (
-                                    <TableRow key={row.id}>
-                                        <TableCell className="font-medium">{row.recipient_name}</TableCell>
-                                        <TableCell className="text-right">{row.deliveries}</TableCell>
-                                        <TableCell className="text-right">
-                                            CHF {Number(row.amount_ttc).toLocaleString('fr-CH', { minimumFractionDigits: 2 })}
-                                        </TableCell>
-                                        <TableCell className="text-center">
-                                            <Badge variant="outline">En cours</Badge>
-                                        </TableCell>
-                                        <TableCell className="text-right">
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                onClick={() => handleDownloadPdf(row.id, row.recipient_name)}
-                                            >
-                                                <FileText className="h-4 w-4" />
-                                            </Button>
-                                        </TableCell>
-                                    </TableRow>
-                                ))
-                            )
-                        ) : independentRows.length === 0 ? (
+                        ) : filteredExternalDocuments.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={tableColSpan} className="h-24 text-center text-muted-foreground">Aucune donnee pour ce mois.</TableCell>
+                                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">Aucune donnee pour ce mois.</TableCell>
                             </TableRow>
                         ) : (
-                            independentRows.map((row) => (
+                            filteredExternalDocuments.map((row) => (
+                                <TableRow key={row.id}>
+                                    <TableCell>
+                                        <Badge variant="outline">{recipientTypeLabels[row.recipient_type]}</Badge>
+                                    </TableCell>
+                                    <TableCell className="font-medium">{row.recipient_name}</TableCell>
+                                    <TableCell className="text-right">{row.deliveries}</TableCell>
+                                    <TableCell className="text-right">
+                                        CHF {Number(row.amount_ttc).toLocaleString('fr-CH', { minimumFractionDigits: 2 })}
+                                    </TableCell>
+                                    <TableCell className="text-center">
+                                        <Badge variant="outline">En cours</Badge>
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                        <div className="flex items-center justify-end gap-2">
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={() => handleExport(row.recipient_type, row.recipient_id, row.recipient_name)}
+                                            >
+                                                <Download className="h-4 w-4" />
+                                            </Button>
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={() => handleDownloadPdf(row.id, row.recipient_name)}
+                                            >
+                                                <FileText className="h-4 w-4" />
+                                            </Button>
+                                        </div>
+                                    </TableCell>
+                                </TableRow>
+                            ))
+                        )}
+                    </TableBody>
+                    </Table>
+                </div>
+            </div>
+
+            <div className="rounded-md border bg-white">
+                <div className="px-4 py-3 border-b border-gray-200">
+                    <div className="text-lg font-semibold">Facture interne</div>
+                    <div className="text-sm text-muted-foreground">
+                        Facture globale pour l&apos;association regionale (montant total des livraisons).
+                    </div>
+                </div>
+                <div className="table-scroll">
+                    <Table className="min-w-[900px]">
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead>Association</TableHead>
+                            <TableHead className="text-right">Livraisons</TableHead>
+                            <TableHead className="text-right">Montant facture (TTC)</TableHead>
+                            <TableHead className="text-center">Statut</TableHead>
+                            <TableHead className="text-right">Action</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {loading ? (
+                            <TableRow>
+                                <TableCell colSpan={5} className="h-24 text-center">Chargement...</TableCell>
+                            </TableRow>
+                        ) : internalDocuments.length === 0 ? (
+                            <TableRow>
+                                <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">Aucune donnee pour ce mois.</TableCell>
+                            </TableRow>
+                        ) : (
+                            internalDocuments.map((row) => (
                                 <TableRow key={row.id}>
                                     <TableCell className="font-medium">{row.recipient_name}</TableCell>
                                     <TableCell className="text-right">{row.deliveries}</TableCell>
@@ -566,13 +694,22 @@ export default function BillingPage() {
                                         <Badge variant="outline">En cours</Badge>
                                     </TableCell>
                                     <TableCell className="text-right">
-                                        <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            onClick={() => handleDownloadPdf(row.id, row.recipient_name)}
-                                        >
-                                            <FileText className="h-4 w-4" />
-                                        </Button>
+                                        <div className="flex items-center justify-end gap-2">
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={() => handleExport(row.recipient_type, row.recipient_id, row.recipient_name)}
+                                            >
+                                                <Download className="h-4 w-4" />
+                                            </Button>
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={() => handleDownloadPdf(row.id, row.recipient_name)}
+                                            >
+                                                <FileText className="h-4 w-4" />
+                                            </Button>
+                                        </div>
                                     </TableCell>
                                 </TableRow>
                             ))
@@ -585,25 +722,27 @@ export default function BillingPage() {
             <div className="rounded-md border bg-white p-4 space-y-4">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                     <div>
-                        <div className="text-lg font-semibold">Detail des courses</div>
+                        <div className="text-lg font-semibold">Audit des livraisons (factures externes)</div>
                         <div className="text-sm text-muted-foreground">
-                            Liste des livraisons pour audit, filtrees par commerce si besoin.
+                            Liste des livraisons pour audit, filtrees par payeur si besoin.
                         </div>
                     </div>
                     <select
                         className="border rounded px-3 py-2 text-sm"
-                        value={selectedRecipientId}
-                        onChange={(e) => setSelectedRecipientId(e.target.value)}
+                        value={selectedRecipientKey}
+                        onChange={(e) => setSelectedRecipientKey(e.target.value)}
                     >
                         <option value="all">
-                            {activeTab === 'communes'
+                            {externalFilter === 'COMMUNE'
                                 ? 'Toutes les communes'
-                                : activeTab === 'hq'
+                                : externalFilter === 'HQ'
                                     ? 'Tous les HQ'
-                                    : 'Tous les commerces'}
+                                    : externalFilter === 'SHOP_INDEP'
+                                        ? 'Tous les commerces'
+                                        : 'Tous les payeurs'}
                         </option>
-                        {activeRecipients.map((row) => (
-                            <option key={row.id} value={row.recipient_id}>
+                        {filteredExternalDocuments.map((row) => (
+                            <option key={row.id} value={`${row.recipient_type}:${row.recipient_id}`}>
                                 {row.recipient_name}
                             </option>
                         ))}
@@ -636,7 +775,7 @@ export default function BillingPage() {
                             visibleDetails.map((row) => {
                                 const amountDue = Number(row.amount_due || 0)
                                 return (
-                                    <TableRow key={row.delivery_id || row.id}>
+                                    <TableRow key={row.id}>
                                         <TableCell>{new Date(row.delivery_date).toLocaleDateString('fr-CH')}</TableCell>
                                         <TableCell>{row.shop_name || '-'}</TableCell>
                                         <TableCell>{row.client_name || '-'}</TableCell>

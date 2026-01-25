@@ -7,6 +7,7 @@ import { useCityBilling } from '../../dashboard/hooks/useCityBilling'
 import { useCityBillingShops } from '../../dashboard/hooks/useCityBillingShops'
 import { API_BASE_URL } from '@/lib/api'
 import { useEcoStats } from '@/app/(protected)/hooks/useEcoStats'
+import { useCityStats } from '../../dashboard/hooks/useCityStats'
 
 function formatCHF(value: number) {
   return `CHF ${value.toLocaleString('fr-CH', {
@@ -22,6 +23,12 @@ function formatMonth(value: unknown) {
   const date = new Date(normalized)
   if (Number.isNaN(date.getTime())) return String(value)
   return date.toLocaleDateString('fr-CH', { month: 'long', year: 'numeric' })
+}
+
+function formatPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) return 'n/a'
+  const sign = value > 0 ? '+' : ''
+  return `${sign}${value.toFixed(1)}%`
 }
 
 function getCurrentMonth() {
@@ -121,6 +128,11 @@ export default function CityReport() {
     error: shopError,
   } = useCityBillingShops(selectedMonth)
   const { data: ecoStats, loading: ecoLoading } = useEcoStats(selectedMonth)
+  const {
+    data: cityStats,
+    loading: statsLoading,
+    error: statsError,
+  } = useCityStats(selectedMonth)
 
   const handleMonthChange = (value: string) => {
     setSelectedMonth(value)
@@ -232,6 +244,70 @@ export default function CityReport() {
           <div className="text-sm text-gray-500">Volume total</div>
           <div className="text-2xl font-semibold">
             {formatCHF(totalVolume)}
+          </div>
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-sm font-medium text-gray-700">
+          Impact local
+        </h2>
+        {statsLoading ? (
+          <div className="text-sm text-gray-500">Chargement...</div>
+        ) : statsError ? (
+          <div className="text-sm text-red-600">{statsError}</div>
+        ) : cityStats ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="rounded-lg border p-4">
+              <div className="text-sm text-gray-500">Beneficiaires uniques</div>
+              <div className="text-2xl font-semibold">{cityStats.unique_clients}</div>
+              <div className="text-xs text-gray-400">Menages servis</div>
+            </div>
+            <div className="rounded-lg border p-4">
+              <div className="text-sm text-gray-500">Commerces actifs</div>
+              <div className="text-2xl font-semibold">{cityStats.active_shops}</div>
+              <div className="text-xs text-gray-400">Ce mois</div>
+            </div>
+            <div className="rounded-lg border p-4">
+              <div className="text-sm text-gray-500">Livraisons CMS</div>
+              <div className="text-2xl font-semibold">{cityStats.cms_deliveries}</div>
+              <div className="text-xs text-gray-400">
+                {cityStats.cms_share_pct.toFixed(1)}% des livraisons
+              </div>
+            </div>
+            <div className="rounded-lg border p-4">
+              <div className="text-sm text-gray-500">Sacs moyens</div>
+              <div className="text-2xl font-semibold">{cityStats.average_bags.toFixed(1)}</div>
+              <div className="text-xs text-gray-400">
+                Total sacs: {cityStats.total_bags}
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="rounded-lg border p-4">
+          <div className="text-sm text-gray-500">Jours actifs</div>
+          <div className="text-2xl font-semibold">
+            {statsLoading || !cityStats ? '-' : cityStats.active_days}
+          </div>
+          <div className="text-xs text-gray-400">Mois en cours</div>
+        </div>
+        <div className="rounded-lg border p-4">
+          <div className="text-sm text-gray-500">Livraisons / jour</div>
+          <div className="text-2xl font-semibold">
+            {statsLoading || !cityStats ? '-' : cityStats.deliveries_per_active_day.toFixed(1)}
+          </div>
+          <div className="text-xs text-gray-400">Jours actifs</div>
+        </div>
+        <div className="rounded-lg border p-4">
+          <div className="text-sm text-gray-500">Evolution livraisons</div>
+          <div className="text-2xl font-semibold">
+            {statsLoading || !cityStats ? '-' : formatPercent(cityStats.deliveries_change_pct)}
+          </div>
+          <div className="text-xs text-gray-400">
+            {statsLoading || !cityStats ? '' : `Vs ${cityStats.previous_month}`}
           </div>
         </div>
       </section>

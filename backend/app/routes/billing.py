@@ -1,5 +1,6 @@
 from datetime import date, datetime
 import csv
+import hashlib
 import io
 import zipfile
 import re
@@ -16,6 +17,7 @@ from app.core.billing_reference import generate_reference
 from app.core.billing_aggregator import aggregate_billing_run
 from app.core.config import settings
 from app.pdf.invoice_qr_bill import build_recipient_invoice_with_qr_bill
+from app.storage.supabase_storage import download_file_bytes, upload_pdf_bytes
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -47,10 +49,10 @@ def _split_address(address: str | None) -> tuple[str | None, str | None]:
     value = address.strip()
     if not value:
         return None, None
-    match = re.match(r"^(?P<num>\d+[A-Za-z0-9\-/]*)\s+(?P<street>.+)$", value)
+    match = re.match(r"^(?P<num>\d+[A-Za-z0-9/\-]*)\s+(?P<street>.+)$", value)
     if match:
         return match.group("street"), match.group("num")
-    match = re.match(r"^(?P<street>.+?)\s+(?P<num>\d+[A-Za-z0-9\-/]*)$", value)
+    match = re.match(r"^(?P<street>.+?)\s+(?P<num>\d+[A-Za-z0-9/\-]*)$", value)
     if match:
         return match.group("street"), match.group("num")
     return value, None
@@ -79,7 +81,18 @@ def _build_billing_document_pdf_bytes(document_id: str, preview: int, jwt_claims
                     d.period_month,
                     d.amount_ttc,
                     d.vat_rate,
-                    COALESCE(h.name, c.name, s.name, 'Destinataire') AS recipient_name,
+                    d.status,
+                    d.pdf_url,
+                    d.recipient_name_snapshot,
+                    d.recipient_street_snapshot,
+                    d.recipient_house_num_snapshot,
+                    d.recipient_postal_code_snapshot,
+                    d.recipient_city_snapshot,
+                    d.recipient_country_snapshot,
+                    CASE
+                        WHEN d.recipient_type = 'INTERNAL' THEN COALESCE(ar.billing_name, ar.name, 'Association')
+                        ELSE COALESCE(h.name, c.name, s.name, 'Destinataire')
+                    END AS recipient_name,
                     h.address, h.contact_person, h.email, h.phone,
                     c.address, c.contact_person, c.email, c.phone,
                     s.address, s.contact_person, s.email, s.phone,
@@ -94,6 +107,15 @@ def _build_billing_document_pdf_bytes(document_id: str, preview: int, jwt_claims
                     ar.billing_city,
                     ar.billing_country,
                     ar.address,
+                    ar.internal_billing_name,
+                    ar.internal_billing_iban,
+                    ar.internal_billing_street,
+                    ar.internal_billing_house_num,
+                    ar.internal_billing_postal_code,
+                    ar.internal_billing_city,
+                    ar.internal_billing_country,
+                    ar.internal_billing_logo_path,
+                    ar.billing_logo_path,
                     d.creditor_name_snapshot,
                     d.creditor_iban_snapshot,
                     d.creditor_street_snapshot,
@@ -124,7 +146,15 @@ def _build_billing_document_pdf_bytes(document_id: str, preview: int, jwt_claims
                 period_month,
                 amount_ttc,
                 vat_rate,
-                recipient_name,
+                status,
+                pdf_url,
+                recipient_name_snapshot,
+                recipient_street_snapshot,
+                recipient_house_num_snapshot,
+                recipient_postal_code_snapshot,
+                recipient_city_snapshot,
+                recipient_country_snapshot,
+                recipient_name_fallback,
                 hq_address,
                 hq_contact,
                 hq_email,
@@ -148,6 +178,15 @@ def _build_billing_document_pdf_bytes(document_id: str, preview: int, jwt_claims
                 billing_city,
                 billing_country,
                 admin_region_address,
+                internal_billing_name,
+                internal_billing_iban,
+                internal_billing_street,
+                internal_billing_house_num,
+                internal_billing_postal_code,
+                internal_billing_city,
+                internal_billing_country,
+                internal_billing_logo_path,
+                billing_logo_path,
                 creditor_name_snapshot,
                 creditor_iban_snapshot,
                 creditor_street_snapshot,
@@ -180,12 +219,23 @@ def _build_billing_document_pdf_bytes(document_id: str, preview: int, jwt_claims
         "COMMUNE": "Commune partenaire",
         "HQ": "HQ",
         "SHOP_INDEP": "Commerce independant",
+        "INTERNAL": "Interne",
     }.get(recipient_type, "Destinataire")
 
-    address = city_address if recipient_type == "COMMUNE" else hq_address if recipient_type == "HQ" else shop_address
-    postal_code = None
-    recipient_city = None
-    if recipient_type == "COMMUNE" and city_id:
+    is_internal = recipient_type == "INTERNAL"
+    recipient_name = recipient_name_snapshot or recipient_name_fallback
+
+    address = (
+        admin_region_address
+        if is_internal
+        else city_address if recipient_type == "COMMUNE" else hq_address if recipient_type == "HQ" else shop_address
+    )
+    fallback_postal_code = None
+    fallback_city = None
+    if is_internal:
+        fallback_postal_code = billing_postal_code
+        fallback_city = billing_city
+    elif recipient_type == "COMMUNE" and city_id:
         with get_db_connection(jwt_claims) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -199,48 +249,73 @@ def _build_billing_document_pdf_bytes(document_id: str, preview: int, jwt_claims
                     (city_id,),
                 )
                 row = cur.fetchone()
-                postal_code = row[0] if row else None
+                fallback_postal_code = row[0] if row else None
                 cur.execute("SELECT name FROM city WHERE id = %s", (city_id,))
                 row = cur.fetchone()
-                recipient_city = row[0] if row else None
+                fallback_city = row[0] if row else None
     elif recipient_type == "SHOP_INDEP" and shop_city_id:
         with get_db_connection(jwt_claims) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT name FROM city WHERE id = %s", (shop_city_id,))
                 row = cur.fetchone()
-                recipient_city = row[0] if row else None
+                fallback_city = row[0] if row else None
 
-    if billing_street is None and admin_region_address:
+    if not is_internal and billing_street is None and admin_region_address:
         billing_street, billing_house_num = _split_address(admin_region_address)
 
-    if billing_street is None:
+    recipient_postal_code = recipient_postal_code_snapshot or fallback_postal_code
+    recipient_city = recipient_city_snapshot or fallback_city
+
+    debtor_street = recipient_street_snapshot
+    debtor_house_num = recipient_house_num_snapshot
+    if not debtor_street or not debtor_house_num:
+        address_street, address_house_num = _split_address(address)
+        debtor_street = debtor_street or address_street
+        debtor_house_num = debtor_house_num or address_house_num
+    if is_internal and billing_street and not debtor_street:
+        debtor_street = billing_street
+        debtor_house_num = billing_house_num
+
+    filename = f"facture-{recipient_label}-{recipient_name}-{period_month.strftime('%Y-%m')}.pdf"
+    filename = filename.replace(" ", "_")
+    if not preview and status == "frozen" and pdf_url:
+        try:
+            pdf_bytes = download_file_bytes(bucket="billing-pdf", path=pdf_url)
+            return pdf_bytes, filename
+        except RuntimeError:
+            pdf_bytes = None
+
+    creditor_name = creditor_name_snapshot or (internal_billing_name if is_internal else billing_name)
+    creditor_iban = creditor_iban_snapshot or (internal_billing_iban if is_internal else billing_iban)
+    creditor_street = creditor_street_snapshot or (internal_billing_street if is_internal else billing_street)
+    creditor_house_num = creditor_house_num_snapshot or (internal_billing_house_num if is_internal else billing_house_num)
+    creditor_postal_code = creditor_postal_code_snapshot or (
+        internal_billing_postal_code if is_internal else billing_postal_code
+    )
+    creditor_city = creditor_city_snapshot or (internal_billing_city if is_internal else billing_city)
+    creditor_country = creditor_country_snapshot or (
+        internal_billing_country if is_internal else billing_country
+    )
+
+    if creditor_street is None:
         fallback_address = settings.BILLING_CREDITOR_ADDRESS
         if settings.BILLING_CREDITOR_STREET:
-            billing_street = settings.BILLING_CREDITOR_STREET
-            if not billing_house_num and settings.BILLING_CREDITOR_HOUSE_NUM:
-                billing_house_num = settings.BILLING_CREDITOR_HOUSE_NUM
+            creditor_street = settings.BILLING_CREDITOR_STREET
+            if not creditor_house_num and settings.BILLING_CREDITOR_HOUSE_NUM:
+                creditor_house_num = settings.BILLING_CREDITOR_HOUSE_NUM
         elif fallback_address:
-            billing_street, billing_house_num = _split_address(fallback_address)
+            creditor_street, creditor_house_num = _split_address(fallback_address)
 
-    if not billing_postal_code and settings.BILLING_CREDITOR_POSTAL_CODE:
-        billing_postal_code = settings.BILLING_CREDITOR_POSTAL_CODE
-    if not billing_city and settings.BILLING_CREDITOR_CITY:
-        billing_city = settings.BILLING_CREDITOR_CITY
-    if not billing_country and settings.BILLING_CREDITOR_COUNTRY:
-        billing_country = settings.BILLING_CREDITOR_COUNTRY
-    if not billing_name and settings.BILLING_CREDITOR_NAME:
-        billing_name = settings.BILLING_CREDITOR_NAME
-    if not billing_iban and settings.BILLING_CREDITOR_IBAN:
-        billing_iban = settings.BILLING_CREDITOR_IBAN
-
-    has_snapshot = bool(creditor_iban_snapshot or creditor_name_snapshot)
-    creditor_iban = creditor_iban_snapshot or billing_iban
-    creditor_name = creditor_name_snapshot or billing_name
-    creditor_street = creditor_street_snapshot or billing_street
-    creditor_house_num = creditor_house_num_snapshot or billing_house_num
-    creditor_postal_code = creditor_postal_code_snapshot or billing_postal_code
-    creditor_city = creditor_city_snapshot or billing_city
-    creditor_country = creditor_country_snapshot or billing_country
+    if not creditor_postal_code and settings.BILLING_CREDITOR_POSTAL_CODE:
+        creditor_postal_code = settings.BILLING_CREDITOR_POSTAL_CODE
+    if not creditor_city and settings.BILLING_CREDITOR_CITY:
+        creditor_city = settings.BILLING_CREDITOR_CITY
+    if not creditor_country and settings.BILLING_CREDITOR_COUNTRY:
+        creditor_country = settings.BILLING_CREDITOR_COUNTRY
+    if not creditor_name and settings.BILLING_CREDITOR_NAME:
+        creditor_name = settings.BILLING_CREDITOR_NAME
+    if not creditor_iban and settings.BILLING_CREDITOR_IBAN:
+        creditor_iban = settings.BILLING_CREDITOR_IBAN
 
     has_billing_override = (
         creditor_name
@@ -249,17 +324,24 @@ def _build_billing_document_pdf_bytes(document_id: str, preview: int, jwt_claims
         and creditor_city
     )
 
-    street, house_num = _split_address(address)
     reference_seed = f"{recipient_type}{recipient_id}{period_month.strftime('%Y%m')}"
     reference = reference_snapshot or generate_reference(creditor_iban or "", reference_seed)
     payment_message = payment_message_snapshot or f"Facturation DringDring {period_month.strftime('%Y-%m')}"
 
+    logo_path = internal_billing_logo_path if is_internal else billing_logo_path
+    logo_bytes = None
+    if logo_path:
+        try:
+            logo_bytes = download_file_bytes(bucket="billing-logos", path=logo_path)
+        except RuntimeError:
+            logo_bytes = None
+
     buffer = build_recipient_invoice_with_qr_bill(
         recipient_label=recipient_label,
         recipient_name=recipient_name,
-        recipient_street=street,
-        recipient_house_num=house_num,
-        recipient_postal_code=postal_code,
+        recipient_street=debtor_street,
+        recipient_house_num=debtor_house_num,
+        recipient_postal_code=recipient_postal_code,
         recipient_city=recipient_city,
         period_month=period_month,
         rows=rows,
@@ -274,12 +356,31 @@ def _build_billing_document_pdf_bytes(document_id: str, preview: int, jwt_claims
         creditor_postal_code=creditor_postal_code if has_billing_override else None,
         creditor_city=creditor_city if has_billing_override else None,
         creditor_country=creditor_country if has_billing_override else None,
+        logo_bytes=logo_bytes,
     )
     buffer.seek(0)
+    pdf_bytes = buffer.getvalue()
 
-    filename = f"facture-{recipient_label}-{recipient_name}-{period_month.strftime('%Y-%m')}.pdf"
-    filename = filename.replace(" ", "_")
-    return buffer.getvalue(), filename
+    if not preview:
+        pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()
+        pdf_path = pdf_url or f"billing-documents/{period_month.strftime('%Y-%m')}/{document_id}.pdf"
+        upload_pdf_bytes(bucket="billing-pdf", path=pdf_path, data=pdf_bytes)
+        with get_db_connection(jwt_claims) as conn:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE billing_document
+                        SET pdf_url = %s,
+                            pdf_sha256 = %s,
+                            pdf_generated_at = now(),
+                            status = 'frozen'
+                        WHERE id = %s
+                        """,
+                        (pdf_path, pdf_hash, document_id),
+                    )
+
+    return pdf_bytes, filename
 
 @router.post("/region/freeze")
 def freeze_region_billing(
@@ -432,19 +533,26 @@ def list_billing_documents(
             d.vat_rate,
             d.status,
             d.pdf_url,
-            COALESCE(h.name, c.name, s.name, 'Destinataire') AS recipient_name,
+            COALESCE(
+                d.recipient_name_snapshot,
+                CASE
+                    WHEN d.recipient_type = 'INTERNAL' THEN COALESCE(ar.billing_name, ar.name, 'Association')
+                    ELSE COALESCE(h.name, c.name, s.name, 'Destinataire')
+                END
+            ) AS recipient_name,
             h.id::text AS hq_id,
             c.id::text AS city_id,
             s.id::text AS shop_id,
             COUNT(l.id) AS deliveries
         FROM billing_document d
         JOIN billing_run r ON r.id = d.run_id
+        JOIN admin_region ar ON ar.id = r.admin_region_id
         LEFT JOIN hq h ON d.recipient_type = 'HQ' AND h.id = d.recipient_id
         LEFT JOIN city c ON d.recipient_type = 'COMMUNE' AND c.id = d.recipient_id
         LEFT JOIN shop s ON d.recipient_type = 'SHOP_INDEP' AND s.id = d.recipient_id
         LEFT JOIN billing_document_line l ON l.document_id = d.id
         WHERE {" AND ".join(filters)}
-        GROUP BY d.id, h.id, c.id, s.id
+        GROUP BY d.id, h.id, c.id, s.id, ar.billing_name, ar.name, d.recipient_name_snapshot
         ORDER BY d.recipient_type, recipient_name
     """
 
@@ -550,6 +658,8 @@ def export_billing_documents(
     month: str = Query(pattern=r"^\d{4}-\d{2}$"),
     admin_region_id: str | None = Query(default=None),
     recipient_type: str | None = Query(default=None),
+    recipient_id: str | None = Query(default=None),
+    detail: int = Query(default=0),
     user: MeResponse = Depends(require_admin_user),
     jwt_claims: str = Depends(get_current_user_claims),
 ):
@@ -561,23 +671,102 @@ def export_billing_documents(
     if recipient_type:
         filters.append("d.recipient_type = %s")
         params.append(recipient_type)
+    if recipient_id:
+        filters.append("d.recipient_id = %s")
+        params.append(recipient_id)
+
+    if detail:
+        sql = f"""
+            SELECT
+                d.recipient_type,
+                COALESCE(
+                    d.recipient_name_snapshot,
+                    CASE
+                        WHEN d.recipient_type = 'INTERNAL' THEN COALESCE(ar.billing_name, ar.name, 'Association')
+                        ELSE COALESCE(h.name, c.name, s.name, 'Destinataire')
+                    END
+                ) AS recipient_name,
+                l.meta->>'delivery_date' AS delivery_date,
+                l.meta->>'shop_name' AS shop_name,
+                l.meta->>'client_name' AS client_name,
+                l.meta->>'commune_name' AS commune_name,
+                l.meta->>'bags' AS bags,
+                l.amount_due,
+                l.delivery_id::text AS delivery_id
+            FROM billing_document_line l
+            JOIN billing_document d ON d.id = l.document_id
+            JOIN billing_run r ON r.id = d.run_id
+            JOIN admin_region ar ON ar.id = r.admin_region_id
+            LEFT JOIN hq h ON d.recipient_type = 'HQ' AND h.id = d.recipient_id
+            LEFT JOIN city c ON d.recipient_type = 'COMMUNE' AND c.id = d.recipient_id
+            LEFT JOIN shop s ON d.recipient_type = 'SHOP_INDEP' AND s.id = d.recipient_id
+            WHERE {" AND ".join(filters)}
+            ORDER BY l.meta->>'delivery_date'
+        """
+
+        with get_db_connection(jwt_claims) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(
+            [
+                "Type",
+                "Payeur",
+                "Date",
+                "Commerce",
+                "Client",
+                "Commune partenaire",
+                "Sacs",
+                "Montant a facturer",
+                "Delivery ID",
+            ]
+        )
+        for row in rows:
+            writer.writerow(
+                [
+                    row[0],
+                    row[1],
+                    row[2],
+                    row[3],
+                    row[4],
+                    row[5],
+                    row[6],
+                    f"{float(row[7] or 0):.2f}",
+                    row[8],
+                ]
+            )
+
+        output.seek(0)
+        filename = f"facturation-details-{month}.csv"
+        headers = {"Content-Disposition": f"attachment; filename={filename}"}
+        return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers=headers)
 
     sql = f"""
         SELECT
             d.recipient_type,
-            COALESCE(h.name, c.name, s.name, 'Destinataire') AS recipient_name,
+            COALESCE(
+                d.recipient_name_snapshot,
+                CASE
+                    WHEN d.recipient_type = 'INTERNAL' THEN COALESCE(ar.billing_name, ar.name, 'Association')
+                    ELSE COALESCE(h.name, c.name, s.name, 'Destinataire')
+                END
+            ) AS recipient_name,
             d.amount_ht,
             d.amount_vat,
             d.amount_ttc,
             COUNT(l.id) AS deliveries
         FROM billing_document d
         JOIN billing_run r ON r.id = d.run_id
+        JOIN admin_region ar ON ar.id = r.admin_region_id
         LEFT JOIN hq h ON d.recipient_type = 'HQ' AND h.id = d.recipient_id
         LEFT JOIN city c ON d.recipient_type = 'COMMUNE' AND c.id = d.recipient_id
         LEFT JOIN shop s ON d.recipient_type = 'SHOP_INDEP' AND s.id = d.recipient_id
         LEFT JOIN billing_document_line l ON l.document_id = d.id
         WHERE {" AND ".join(filters)}
-        GROUP BY d.id, h.id, c.id, s.id
+        GROUP BY d.id, h.id, c.id, s.id, ar.billing_name, ar.name, d.recipient_name_snapshot
         ORDER BY d.recipient_type, recipient_name
     """
 

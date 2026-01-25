@@ -20,7 +20,8 @@ import {
     MapPin,
     ListTodo,
     UserCircle,
-    Tags
+    Tags,
+    LifeBuoy
 } from 'lucide-react'
 
 // Map roles to navigation items based on SPECIFICATION
@@ -83,9 +84,10 @@ const getNavItems = (role: string, adminContextRegion: any, pathname: string) =>
     // CUSTOMER
     if (role === 'customer') {
         return [
-            { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+            { label: 'Accueil', href: '/dashboard', icon: LayoutDashboard },
             { label: 'Historique', href: '/customer/deliveries', icon: ListTodo },
             { label: 'Mon compte', href: '/customer/profile', icon: UserCircle },
+            { label: 'Aide & support', href: '/customer/support', icon: LifeBuoy },
         ]
     }
 

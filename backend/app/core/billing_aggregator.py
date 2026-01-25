@@ -51,19 +51,138 @@ def _split_vat(amount_ttc: Decimal, vat_rate: Decimal) -> tuple[Decimal, Decimal
     return _quantize(amount_ht), _quantize(amount_vat), _quantize(amount_ttc)
 
 
+_POSTAL_CITY_RE = re.compile(r"\\b(?P<postal>\\d{4})\\s+(?P<city>.+)$")
+
+
 def _split_address_parts(value: str | None) -> tuple[str | None, str | None]:
     if not value:
         return None, None
     address = value.strip()
     if not address:
         return None, None
-    match = re.match(r"^(?P<num>\\d+[A-Za-z0-9\\-/]*)\\s+(?P<street>.+)$", address)
+    match = re.match(r"^(?P<num>\\d+[A-Za-z0-9/\\-]*)\\s+(?P<street>.+)$", address)
     if match:
         return match.group("street"), match.group("num")
-    match = re.match(r"^(?P<street>.+?)\\s+(?P<num>\\d+[A-Za-z0-9\\-/]*)$", address)
+    match = re.match(r"^(?P<street>.+?)\\s+(?P<num>\\d+[A-Za-z0-9/\\-]*)$", address)
     if match:
         return match.group("street"), match.group("num")
     return address, None
+
+
+def _split_address_full(value: str | None) -> tuple[str | None, str | None, str | None, str | None]:
+    if not value:
+        return None, None, None, None
+    address = value.strip()
+    if not address:
+        return None, None, None, None
+    postal_code = None
+    city = None
+    match = _POSTAL_CITY_RE.search(address)
+    if match:
+        postal_code = match.group("postal").strip()
+        city = match.group("city").strip()
+        address = address[:match.start()].strip().rstrip(",")
+    street, house_num = _split_address_parts(address)
+    return street, house_num, postal_code, city
+
+
+def _resolve_recipient_snapshot(
+    cur,
+    *,
+    recipient_type: str,
+    recipient_id: str,
+    billing_name: str | None,
+    billing_street: str | None,
+    billing_house_num: str | None,
+    billing_postal_code: str | None,
+    billing_city: str | None,
+    billing_country: str | None,
+) -> dict:
+    if recipient_type == "INTERNAL":
+        return {
+            "name": billing_name or "Association",
+            "street": billing_street,
+            "house_num": billing_house_num,
+            "postal_code": billing_postal_code,
+            "city": billing_city,
+            "country": billing_country or "CH",
+        }
+
+    if recipient_type == "COMMUNE":
+        cur.execute("SELECT name, address FROM city WHERE id = %s", (recipient_id,))
+        row = cur.fetchone()
+        city_name = row[0] if row else None
+        address = row[1] if row else None
+        cur.execute(
+            """
+            SELECT postal_code
+            FROM city_postal_code
+            WHERE city_id = %s
+            ORDER BY postal_code
+            LIMIT 1
+            """,
+            (recipient_id,),
+        )
+        postal_row = cur.fetchone()
+        street, house_num, postal_code, city_from_address = _split_address_full(address)
+        if not postal_code and postal_row:
+            postal_code = postal_row[0]
+        return {
+            "name": city_name or "Commune",
+            "street": street,
+            "house_num": house_num,
+            "postal_code": postal_code,
+            "city": city_from_address or city_name,
+            "country": "CH",
+        }
+
+    if recipient_type == "HQ":
+        cur.execute("SELECT name, address FROM hq WHERE id = %s", (recipient_id,))
+        row = cur.fetchone()
+        name = row[0] if row else None
+        address = row[1] if row else None
+        street, house_num, postal_code, city = _split_address_full(address)
+        return {
+            "name": name or "HQ",
+            "street": street,
+            "house_num": house_num,
+            "postal_code": postal_code,
+            "city": city,
+            "country": "CH",
+        }
+
+    if recipient_type == "SHOP_INDEP":
+        cur.execute(
+            """
+            SELECT s.name, s.address, c.name
+            FROM shop s
+            LEFT JOIN city c ON c.id = s.city_id
+            WHERE s.id = %s
+            """,
+            (recipient_id,),
+        )
+        row = cur.fetchone()
+        name = row[0] if row else None
+        address = row[1] if row else None
+        city_name = row[2] if row else None
+        street, house_num, postal_code, city = _split_address_full(address)
+        return {
+            "name": name or "Commerce",
+            "street": street,
+            "house_num": house_num,
+            "postal_code": postal_code,
+            "city": city or city_name,
+            "country": "CH",
+        }
+
+    return {
+        "name": "Destinataire",
+        "street": None,
+        "house_num": None,
+        "postal_code": None,
+        "city": None,
+        "country": "CH",
+    }
 
 
 def _is_independent_hq(hq_id: str | None, hq_name: str | None) -> bool:
@@ -116,7 +235,14 @@ def aggregate_billing_run(
                         billing_postal_code,
                         billing_city,
                         billing_country,
-                        address
+                        address,
+                        internal_billing_name,
+                        internal_billing_iban,
+                        internal_billing_street,
+                        internal_billing_house_num,
+                        internal_billing_postal_code,
+                        internal_billing_city,
+                        internal_billing_country
                     FROM admin_region
                     WHERE id = %s
                     """,
@@ -133,6 +259,13 @@ def aggregate_billing_run(
                         billing_city,
                         billing_country,
                         admin_region_address,
+                        internal_billing_name,
+                        internal_billing_iban,
+                        internal_billing_street,
+                        internal_billing_house_num,
+                        internal_billing_postal_code,
+                        internal_billing_city,
+                        internal_billing_country,
                     ) = billing_row
                 else:
                     billing_name = None
@@ -143,20 +276,64 @@ def aggregate_billing_run(
                     billing_city = None
                     billing_country = None
                     admin_region_address = None
+                    internal_billing_name = None
+                    internal_billing_iban = None
+                    internal_billing_street = None
+                    internal_billing_house_num = None
+                    internal_billing_postal_code = None
+                    internal_billing_city = None
+                    internal_billing_country = None
 
                 if billing_street is None and admin_region_address:
                     billing_street, billing_house_num = _split_address_parts(admin_region_address)
 
                 cur.execute(
                     """
+                    SELECT recipient_type, recipient_id::text
+                    FROM billing_document
+                    WHERE run_id = %s
+                      AND status = 'frozen'
+                    """,
+                    (run_id,),
+                )
+                frozen_recipients = {(row[0], row[1]) for row in cur.fetchall()}
+
+                cur.execute(
+                    """
                     DELETE FROM billing_document_line
                     WHERE document_id IN (
-                        SELECT id FROM billing_document WHERE run_id = %s
+                        SELECT id FROM billing_document
+                        WHERE run_id = %s
+                          AND status <> 'frozen'
                     )
                     """,
                     (run_id,),
                 )
-                cur.execute("DELETE FROM billing_document WHERE run_id = %s", (run_id,))
+                cur.execute(
+                    "DELETE FROM billing_document WHERE run_id = %s AND status <> 'frozen'",
+                    (run_id,),
+                )
+
+                recipient_snapshot_cache: dict[tuple[str, str], dict] = {}
+
+                def _get_recipient_snapshot(recipient_type: str, recipient_id: str) -> dict:
+                    key = (recipient_type, recipient_id)
+                    cached = recipient_snapshot_cache.get(key)
+                    if cached is not None:
+                        return cached
+                    snapshot = _resolve_recipient_snapshot(
+                        cur,
+                        recipient_type=recipient_type,
+                        recipient_id=recipient_id,
+                        billing_name=billing_name,
+                        billing_street=billing_street,
+                        billing_house_num=billing_house_num,
+                        billing_postal_code=billing_postal_code,
+                        billing_city=billing_city,
+                        billing_country=billing_country,
+                    )
+                    recipient_snapshot_cache[key] = snapshot
+                    return snapshot
 
                 vat_rate = _get_vat_rate(cur, period_month)
 
@@ -195,6 +372,7 @@ def aggregate_billing_run(
                 )
 
                 payor_lines: dict[tuple[str, str], list[RecipientLine]] = defaultdict(list)
+                internal_lines: list[RecipientLine] = []
 
                 for (
                     delivery_id,
@@ -219,6 +397,7 @@ def aggregate_billing_run(
 
                     share_city_amount = Decimal(str(share_city or 0))
                     share_admin_amount = Decimal(str(share_admin_region or 0))
+                    total_price_amount = Decimal(str(total_price or 0))
 
                     meta = {
                         "delivery_date": delivery_date.isoformat(),
@@ -260,15 +439,28 @@ def aggregate_billing_run(
                                 )
                             )
 
+                    if total_price_amount > 0:
+                        internal_lines.append(
+                            RecipientLine(
+                                shop_id=str(shop_id),
+                                delivery_id=str(delivery_id),
+                                amount_due=total_price_amount,
+                                meta=meta,
+                            )
+                        )
+
                 document_count = 0
                 line_count = 0
 
                 for (recipient_type, recipient_id), lines in payor_lines.items():
+                    if (recipient_type, recipient_id) in frozen_recipients:
+                        continue
                     total_ttc = sum((line.amount_due for line in lines), Decimal("0.00"))
                     amount_ht, amount_vat, amount_ttc = _split_vat(total_ttc, vat_rate)
                     reference_seed = f"{recipient_type}{recipient_id}{period_month.strftime('%Y%m')}"
                     reference_snapshot = generate_reference(billing_iban or "", reference_seed)
                     payment_message_snapshot = f"Facturation DringDring {period_month.strftime('%Y-%m')}"
+                    recipient_snapshot = _get_recipient_snapshot(recipient_type, recipient_id)
 
                     cur.execute(
                         """
@@ -276,6 +468,12 @@ def aggregate_billing_run(
                             run_id,
                             recipient_type,
                             recipient_id,
+                            recipient_name_snapshot,
+                            recipient_street_snapshot,
+                            recipient_house_num_snapshot,
+                            recipient_postal_code_snapshot,
+                            recipient_city_snapshot,
+                            recipient_country_snapshot,
                             period_month,
                             amount_ht,
                             amount_vat,
@@ -294,13 +492,19 @@ def aggregate_billing_run(
                             created_by,
                             updated_by
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s, %s)
                         RETURNING id
                         """,
                         (
                             run_id,
                             recipient_type,
                             recipient_id,
+                            recipient_snapshot.get("name"),
+                            recipient_snapshot.get("street"),
+                            recipient_snapshot.get("house_num"),
+                            recipient_snapshot.get("postal_code"),
+                            recipient_snapshot.get("city"),
+                            recipient_snapshot.get("country"),
                             period_month,
                             amount_ht,
                             amount_vat,
@@ -325,6 +529,107 @@ def aggregate_billing_run(
                     from psycopg.types.json import Jsonb
 
                     for line in lines:
+                        cur.execute(
+                            """
+                            INSERT INTO billing_document_line (
+                                document_id,
+                                shop_id,
+                                delivery_id,
+                                amount_due,
+                                meta
+                            )
+                            VALUES (%s, %s, %s, %s, %s)
+                            """,
+                            (
+                                document_id,
+                                line.shop_id,
+                                line.delivery_id,
+                                line.amount_due,
+                                Jsonb(line.meta),
+                            ),
+                        )
+                        line_count += 1
+
+                if (
+                    internal_lines
+                    and internal_billing_name
+                    and internal_billing_iban
+                    and ("INTERNAL", str(admin_region_id)) not in frozen_recipients
+                ):
+                    total_ttc = sum((line.amount_due for line in internal_lines), Decimal("0.00"))
+                    amount_ht, amount_vat, amount_ttc = _split_vat(total_ttc, vat_rate)
+                    reference_seed = f"INTERNAL{admin_region_id}{period_month.strftime('%Y%m')}"
+                    reference_snapshot = generate_reference(internal_billing_iban, reference_seed)
+                    payment_message_snapshot = f"Facturation interne DringDring {period_month.strftime('%Y-%m')}"
+                    recipient_snapshot = _get_recipient_snapshot("INTERNAL", str(admin_region_id))
+
+                    cur.execute(
+                        """
+                        INSERT INTO billing_document (
+                            run_id,
+                            recipient_type,
+                            recipient_id,
+                            recipient_name_snapshot,
+                            recipient_street_snapshot,
+                            recipient_house_num_snapshot,
+                            recipient_postal_code_snapshot,
+                            recipient_city_snapshot,
+                            recipient_country_snapshot,
+                            period_month,
+                            amount_ht,
+                            amount_vat,
+                            amount_ttc,
+                            vat_rate,
+                            creditor_name_snapshot,
+                            creditor_iban_snapshot,
+                            creditor_street_snapshot,
+                            creditor_house_num_snapshot,
+                            creditor_postal_code_snapshot,
+                            creditor_city_snapshot,
+                            creditor_country_snapshot,
+                            reference_snapshot,
+                            payment_message_snapshot,
+                            status,
+                            created_by,
+                            updated_by
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s, %s)
+                        RETURNING id
+                        """,
+                        (
+                            run_id,
+                            "INTERNAL",
+                            admin_region_id,
+                            recipient_snapshot.get("name"),
+                            recipient_snapshot.get("street"),
+                            recipient_snapshot.get("house_num"),
+                            recipient_snapshot.get("postal_code"),
+                            recipient_snapshot.get("city"),
+                            recipient_snapshot.get("country"),
+                            period_month,
+                            amount_ht,
+                            amount_vat,
+                            amount_ttc,
+                            vat_rate,
+                            internal_billing_name,
+                            internal_billing_iban,
+                            internal_billing_street,
+                            internal_billing_house_num,
+                            internal_billing_postal_code,
+                            internal_billing_city,
+                            internal_billing_country,
+                            reference_snapshot,
+                            payment_message_snapshot,
+                            created_by,
+                            created_by,
+                        ),
+                    )
+                    document_id = cur.fetchone()[0]
+                    document_count += 1
+
+                    from psycopg.types.json import Jsonb
+
+                    for line in internal_lines:
                         cur.execute(
                             """
                             INSERT INTO billing_document_line (

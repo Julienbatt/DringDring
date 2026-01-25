@@ -5,6 +5,7 @@ This module provides invoice generation with strict Swiss QR Bill compliance.
 """
 
 from datetime import date
+import re
 from decimal import Decimal
 from io import BytesIO
 
@@ -12,12 +13,15 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm, mm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle, KeepTogether
 from reportlab.pdfgen import canvas as pdf_canvas
 
-from app.pdf.logo import build_logo_flowables
+from app.pdf.logo import build_logo_flowables, build_logo_image
 from app.pdf.swiss_qr_renderer import render_swiss_qr_bill
 from app.core.config import settings
+
+_POSTAL_CITY_RE = re.compile(r"\b(?P<postal>\d{4})\s+(?P<city>.+)$")
+_STREET_NUM_RE = re.compile(r"^(?P<street>.+?)\s+(?P<num>\d+[A-Za-z0-9/\-]*)$")
 
 
 def build_recipient_invoice_with_qr_bill(
@@ -41,6 +45,7 @@ def build_recipient_invoice_with_qr_bill(
     creditor_postal_code: str | None = None,
     creditor_city: str | None = None,
     creditor_country: str | None = None,
+    logo_bytes: bytes | None = None,
 ) -> BytesIO:
     """
     Build a recipient invoice PDF with Swiss QR Bill payment section.
@@ -83,17 +88,140 @@ def build_recipient_invoice_with_qr_bill(
     )
     
     styles = getSampleStyleSheet()
+    note_heading_style = ParagraphStyle(
+        "note_heading",
+        parent=styles["Heading3"],
+        fontSize=9,
+        leading=11,
+        spaceAfter=2,
+    )
+    note_style = ParagraphStyle(
+        "note",
+        parent=styles["Normal"],
+        fontSize=8,
+        leading=10,
+    )
+    note_italic_style = ParagraphStyle(
+        "note_italic",
+        parent=styles["Italic"],
+        fontSize=8,
+        leading=10,
+    )
+    address_style = ParagraphStyle(
+        "recipient_address",
+        parent=styles["Normal"],
+        fontSize=9,
+        leading=11,
+    )
     elements: list = []
     
-    # Header
-    elements.extend(build_logo_flowables())
-    elements.append(Paragraph("<b>DringDring</b>", styles["Title"]))
-    elements.append(
-        Paragraph(
-            f"<b>Facture mensuelle - {recipient_label} {recipient_name}</b>",
-            styles["Heading2"],
-        )
+    # Header with left (default) and right (regional) logos.
+    left_logo = build_logo_image(width_cm=3.6)
+    right_logo = build_logo_image(width_cm=6.6, logo_bytes=logo_bytes) if logo_bytes else None
+    left_logo_max_height = 2.1 * cm
+    right_logo_max_height = 2.9 * cm
+    if left_logo and left_logo.drawHeight > left_logo_max_height:
+        scale = left_logo_max_height / left_logo.drawHeight
+        left_logo.drawHeight = left_logo_max_height
+        left_logo.drawWidth = left_logo.drawWidth * scale
+    if right_logo and right_logo.drawHeight > right_logo_max_height:
+        scale = right_logo_max_height / right_logo.drawHeight
+        right_logo.drawHeight = right_logo_max_height
+        right_logo.drawWidth = right_logo.drawWidth * scale
+    logo_row_height = max(
+        left_logo.drawHeight if left_logo else 0,
+        right_logo.drawHeight if right_logo else 0,
     )
+    left_col_width = doc.width * 0.55
+    right_col_width = doc.width * 0.45
+    if left_logo and right_logo:
+        left_logo.hAlign = "LEFT"
+        right_logo.hAlign = "RIGHT"
+        logo_table = Table(
+            [[left_logo, right_logo]],
+            colWidths=[left_col_width, right_col_width],
+            rowHeights=[logo_row_height],
+        )
+        logo_table.setStyle(
+            TableStyle(
+                [
+                    ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
+                    ("ALIGN", (0, 0), (0, 0), "LEFT"),
+                    ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ]
+            )
+        )
+        elements.append(logo_table)
+        elements.append(Spacer(1, 10))
+    elif left_logo:
+        elements.extend([left_logo, Spacer(1, 12)])
+    elif right_logo:
+        right_logo.hAlign = "RIGHT"
+        elements.extend([right_logo, Spacer(1, 12)])
+    else:
+        elements.extend(build_logo_flowables())
+
+    recipient_street_value = recipient_street
+    recipient_house_num_value = recipient_house_num
+    recipient_postal_code_value = recipient_postal_code
+    recipient_city_value = recipient_city
+
+    if recipient_street_value:
+        match = _POSTAL_CITY_RE.search(recipient_street_value)
+        if match:
+            extracted_postal = match.group("postal").strip()
+            extracted_city = match.group("city").strip()
+            recipient_street_value = recipient_street_value[:match.start()].strip().rstrip(",")
+            if not recipient_postal_code_value:
+                recipient_postal_code_value = extracted_postal
+            if not recipient_city_value:
+                recipient_city_value = extracted_city
+
+    if recipient_street_value and not recipient_house_num_value:
+        match = _STREET_NUM_RE.match(recipient_street_value.strip())
+        if match:
+            recipient_street_value = match.group("street").strip()
+            recipient_house_num_value = match.group("num").strip()
+
+    recipient_lines = [recipient_name]
+    recipient_street_line = None
+    if recipient_street_value:
+        recipient_street_line = recipient_street_value
+        if recipient_house_num_value:
+            recipient_street_line = f"{recipient_street_value} {recipient_house_num_value}"
+    if recipient_street_line:
+        recipient_lines.append(recipient_street_line)
+    recipient_city_line = None
+    if recipient_postal_code_value or recipient_city_value:
+        recipient_city_line = f"{recipient_postal_code_value or ''} {recipient_city_value or ''}".strip()
+    if recipient_city_line:
+        recipient_lines.append(recipient_city_line)
+
+    if recipient_lines:
+        recipient_html = "<br/>".join(recipient_lines)
+        address_table = Table(
+            [["", Paragraph(recipient_html, address_style)]],
+            colWidths=[left_col_width, right_col_width],
+        )
+        address_table.setStyle(
+            TableStyle(
+                [
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ]
+            )
+        )
+        elements.append(address_table)
+        elements.append(Spacer(1, 10))
+
+    elements.append(Paragraph("<b>Facture mensuelle</b>", styles["Heading2"]))
     elements.append(
         Paragraph(
             f"Periode : {period_month.strftime('%B %Y')}",
@@ -171,77 +299,70 @@ def build_recipient_invoice_with_qr_bill(
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("LEFTPADDING", (0, 0), (-1, -1), 4),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                ("TOPPADDING", (0, 0), (-1, -1), 3),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
             ]
         )
     )
     elements.append(table)
-    elements.append(Spacer(1, 16))
-    
-    # Totals
-    elements.append(Paragraph("<b>Totaux</b>", styles["Heading3"]))
-    
-    # VAT breakdown
+    elements.append(Spacer(1, 10))
+
+    totals_block: list = []
+    totals_block.append(Paragraph("<b>Totaux</b>", styles["Heading3"]))
+
     if vat_rate:
         vat_rate_decimal = Decimal(str(vat_rate))
         divisor = Decimal("1.00") + vat_rate_decimal
         amount_ht = (total_due / divisor).quantize(Decimal("0.01"))
         vat_amount = (total_due - amount_ht).quantize(Decimal("0.01"))
-        
-        elements.append(
+        totals_block.append(
             Paragraph(
                 f"Montant HT : CHF {amount_ht:.2f}",
                 styles["Normal"],
             )
         )
-        elements.append(
+        totals_block.append(
             Paragraph(
                 f"TVA ({vat_rate_decimal * 100:.1f}%) : CHF {vat_amount:.2f}",
                 styles["Normal"],
             )
         )
-    
-    elements.append(
+
+    totals_block.append(
         Paragraph(
             f"<b>Montant total TTC : CHF {total_due:.2f}</b>",
             styles["Normal"],
         )
     )
-    elements.append(Spacer(1, 18))
-    
-    # Note about QR bill
-    elements.append(
-        Paragraph(
-            "<b>Informations de paiement</b>",
-            styles["Heading3"],
-        )
-    )
-    elements.append(
+    totals_block.append(Spacer(1, 8))
+    totals_block.append(Paragraph("<b>Informations de paiement</b>", note_heading_style))
+    totals_block.append(
         Paragraph(
             "Veuillez utiliser le bulletin de versement QR en bas de page pour effectuer le paiement.",
-            styles["Normal"],
+            note_style,
         )
     )
-    
+
     if is_preview:
-        elements.append(Spacer(1, 12))
-        elements.append(
+        totals_block.append(Spacer(1, 6))
+        totals_block.append(
             Paragraph(
                 "<i>Document provisoire (periode non gelee). "
                 "Les montants peuvent evoluer.</i>",
-                styles["Italic"],
+                note_italic_style,
             )
         )
     else:
-        elements.append(Spacer(1, 12))
-        elements.append(
+        totals_block.append(Spacer(1, 6))
+        totals_block.append(
             Paragraph(
                 "<i>Ce document est genere automatiquement par DringDring a partir "
                 "de donnees gelees. Toute modification ulterieure est impossible.</i>",
-                styles["Italic"],
+                note_italic_style,
             )
         )
+
+    elements.append(KeepTogether(totals_block))
     
     # Build main content
     def add_qr_bill(canvas):
@@ -271,10 +392,10 @@ def build_recipient_invoice_with_qr_bill(
             creditor_country=country,
             # Debtor
             debtor_name=recipient_name,
-            debtor_street=recipient_street,
-            debtor_house_num=recipient_house_num,
-            debtor_postal_code=recipient_postal_code,
-            debtor_city=recipient_city,
+            debtor_street=recipient_street_value,
+            debtor_house_num=recipient_house_num_value,
+            debtor_postal_code=recipient_postal_code_value,
+            debtor_city=recipient_city_value,
             debtor_country="CH",
             # Payment details
             amount=total_due,

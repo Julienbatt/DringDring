@@ -34,6 +34,7 @@ def build_recipient_invoice_pdf(
     creditor_postal_code: str | None = None,
     creditor_city: str | None = None,
     creditor_country: str | None = None,
+    logo_bytes: bytes | None = None,
 ) -> BytesIO:
     return build_recipient_invoice_with_qr_bill(
         recipient_label=recipient_label,
@@ -55,4 +56,5 @@ def build_recipient_invoice_pdf(
         creditor_postal_code=creditor_postal_code,
         creditor_city=creditor_city,
         creditor_country=creditor_country,
+        logo_bytes=logo_bytes,
     )

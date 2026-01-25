@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from app.db.session import get_db_connection
 from app.pdf.invoice_qr_bill import build_recipient_invoice_with_qr_bill
 from app.pdf.shop_monthly_report import build_shop_monthly_pdf
-from app.storage.supabase_storage import upload_pdf_bytes
+from app.storage.supabase_storage import upload_pdf_bytes, download_file_bytes
 from app.core.billing_reference import generate_reference
 
 
@@ -71,7 +71,8 @@ def freeze_shop_billing_period(
             ar.billing_postal_code,
             ar.billing_city,
             ar.billing_country,
-            ar.address
+            ar.address,
+            ar.billing_logo_path
         FROM shop s
         JOIN city c ON c.id = s.city_id
         LEFT JOIN hq h ON h.id = s.hq_id
@@ -105,7 +106,15 @@ def freeze_shop_billing_period(
         billing_city,
         billing_country,
         admin_region_address,
+        billing_logo_path,
     ) = shop_row
+
+    logo_bytes = None
+    if billing_logo_path:
+        try:
+            logo_bytes = download_file_bytes(bucket="billing-logos", path=billing_logo_path)
+        except RuntimeError:
+            logo_bytes = None
 
     if billing_street is None and admin_region_address:
         billing_street, billing_house_num = _split_address_parts(admin_region_address)
@@ -213,6 +222,7 @@ def freeze_shop_billing_period(
             creditor_postal_code=billing_postal_code if has_billing_override else None,
             creditor_city=billing_city if has_billing_override else None,
             creditor_country=billing_country if has_billing_override else None,
+            logo_bytes=logo_bytes,
         )
     else:
         pdf_buffer = build_shop_monthly_pdf(

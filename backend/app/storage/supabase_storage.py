@@ -5,7 +5,7 @@ import urllib.request
 from app.core.config import settings
 
 
-def upload_pdf_bytes(*, bucket: str, path: str, data: bytes) -> str:
+def upload_file_bytes(*, bucket: str, path: str, data: bytes, content_type: str) -> str:
     supabase_url = settings.SUPABASE_URL
     service_key = settings.SUPABASE_SERVICE_KEY
     if not supabase_url or not service_key:
@@ -18,7 +18,7 @@ def upload_pdf_bytes(*, bucket: str, path: str, data: bytes) -> str:
         headers = {
             "Authorization": f"Bearer {service_key}",
             "apikey": service_key,
-            "Content-Type": "application/pdf",
+            "Content-Type": content_type,
             "x-upsert": "true",
         }
         request = urllib.request.Request(
@@ -34,7 +34,7 @@ def upload_pdf_bytes(*, bucket: str, path: str, data: bytes) -> str:
         _upload()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
-        if exc.code == 404 and "Bucket not found" in detail:
+        if "Bucket not found" in detail:
             _ensure_bucket(base_url=base_url, service_key=service_key, bucket=bucket)
             _upload()
         else:
@@ -45,6 +45,15 @@ def upload_pdf_bytes(*, bucket: str, path: str, data: bytes) -> str:
         raise RuntimeError(f"Supabase upload failed: {exc.reason}") from exc
 
     return path
+
+
+def upload_pdf_bytes(*, bucket: str, path: str, data: bytes) -> str:
+    return upload_file_bytes(
+        bucket=bucket,
+        path=path,
+        data=data,
+        content_type="application/pdf",
+    )
 
 
 def download_pdf_bytes(*, bucket: str, path: str) -> bytes:
@@ -76,6 +85,10 @@ def download_pdf_bytes(*, bucket: str, path: str) -> bytes:
         ) from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Supabase download failed: {exc.reason}") from exc
+
+
+def download_file_bytes(*, bucket: str, path: str) -> bytes:
+    return download_pdf_bytes(bucket=bucket, path=path)
 
 
 def _ensure_bucket(*, base_url: str, service_key: str, bucket: str) -> None:

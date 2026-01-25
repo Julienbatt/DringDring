@@ -134,13 +134,22 @@ def get_shop_stats(
                         d.client_id,
                         l.client_name,
                         COALESCE(l.bags, 0) AS bags,
-                        COALESCE(f.total_price, 0) AS total_price
+                        COALESCE(f.share_admin_region, 0) AS amount_due,
+                        COALESCE(st.status, '') AS status
                     FROM delivery d
                     JOIN delivery_logistics l ON l.delivery_id = d.id
                     LEFT JOIN delivery_financial f ON f.delivery_id = d.id
+                    LEFT JOIN LATERAL (
+                        SELECT status
+                        FROM delivery_status
+                        WHERE delivery_id = d.id
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                    ) st ON true
                     WHERE d.shop_id = %s
                       AND date_trunc('month', d.delivery_date)
                         = date_trunc('month', %s::date)
+                      AND COALESCE(st.status, '') <> 'cancelled'
                 ),
                 client_counts AS (
                     SELECT client_id, COUNT(*) AS deliveries
@@ -165,7 +174,7 @@ def get_shop_stats(
                     (SELECT COUNT(*) FROM client_counts WHERE deliveries > 1) AS repeat_clients,
                     (SELECT COALESCE(SUM(bags), 0) FROM base) AS total_bags,
                     (SELECT COALESCE(AVG(bags), 0) FROM base) AS average_bags,
-                    (SELECT COALESCE(SUM(total_price), 0) FROM base) AS total_volume_chf,
+                    (SELECT COALESCE(SUM(amount_due), 0) FROM base) AS total_volume_chf,
                     (SELECT COUNT(*) FROM daily_counts) AS active_days,
                     (SELECT delivery_day FROM peak_day) AS peak_day,
                     (SELECT deliveries FROM peak_day) AS peak_day_deliveries
@@ -180,13 +189,22 @@ def get_shop_stats(
                     SELECT
                         d.client_id,
                         l.client_name,
-                        COALESCE(l.bags, 0) AS bags
+                        COALESCE(l.bags, 0) AS bags,
+                        COALESCE(st.status, '') AS status
                     FROM delivery d
                     JOIN delivery_logistics l ON l.delivery_id = d.id
+                    LEFT JOIN LATERAL (
+                        SELECT status
+                        FROM delivery_status
+                        WHERE delivery_id = d.id
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                    ) st ON true
                     WHERE d.shop_id = %s
                       AND date_trunc('month', d.delivery_date)
                         = date_trunc('month', %s::date)
                       AND d.client_id IS NOT NULL
+                      AND COALESCE(st.status, '') <> 'cancelled'
                 )
                 SELECT
                     client_id::text,
@@ -214,9 +232,17 @@ def get_shop_stats(
                 """
                 SELECT COUNT(*)
                 FROM delivery d
+                LEFT JOIN LATERAL (
+                    SELECT status
+                    FROM delivery_status
+                    WHERE delivery_id = d.id
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ) st ON true
                 WHERE d.shop_id = %s
                   AND date_trunc('month', d.delivery_date)
                     = date_trunc('month', %s::date)
+                  AND COALESCE(st.status, '') <> 'cancelled'
                 """,
                 (str(shop_id), prev_month_start),
             )

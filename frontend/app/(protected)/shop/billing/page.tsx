@@ -68,12 +68,15 @@ export default function ShopBillingPage() {
   const [pickerYear, setPickerYear] = useState(() => Number(getCurrentMonth().split('-')[0]))
   const monthPickerRef = useRef<HTMLDivElement | null>(null)
 
-  const totalDeliveries = deliveries?.length ?? 0
-  const totalAdminRegion = (deliveries ?? []).reduce(
+  const activeDeliveries = (deliveries ?? []).filter(
+    (row: ShopDeliveryRow) => String(row.status || '').toLowerCase() !== 'cancelled'
+  )
+  const totalDeliveries = activeDeliveries.length
+  const totalAdminRegion = activeDeliveries.reduce(
     (acc: number, row: ShopDeliveryRow) => acc + (Number(row.share_admin_region) || 0),
     0
   )
-  const totalBags = (deliveries ?? []).reduce(
+  const totalBags = activeDeliveries.reduce(
     (acc: number, row: ShopDeliveryRow) => acc + (Number(row.bags) || 0),
     0
   )
@@ -288,7 +291,7 @@ export default function ShopBillingPage() {
           <div className="text-sm text-gray-500">Chargement...</div>
         ) : error ? (
           <div className="text-sm text-red-600">{error}</div>
-        ) : deliveries && deliveries.length > 0 ? (
+        ) : activeDeliveries.length > 0 ? (
           <div className="overflow-auto border rounded">
             <table className="min-w-full border-collapse text-sm">
               <thead className="bg-gray-100">
@@ -301,7 +304,7 @@ export default function ShopBillingPage() {
                 </tr>
               </thead>
               <tbody>
-                {deliveries.map((row, index) => (
+                {activeDeliveries.map((row, index) => (
                   <tr key={index} className="odd:bg-white even:bg-gray-50">
                     <td className="border px-3 py-2 whitespace-nowrap">
                       {String(row.delivery_date || '').slice(0, 10)}

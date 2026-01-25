@@ -64,6 +64,7 @@ export default function DispatchPage() {
         notes: ''
     })
     const deliveryEditGraceHours = 48
+    const [showCancelled, setShowCancelled] = useState(false)
 
     // Tabs State
     const [activeTab, setActiveTab] = useState<'todo' | 'assigned' | 'done'>('todo')
@@ -223,7 +224,12 @@ export default function DispatchPage() {
     const assignedDeliveries = deliveries.filter(
         (d) => d.courier_id && !['delivered', 'cancelled'].includes(d.status || '')
     )
-    const completedDeliveries = deliveries.filter((d) => ['delivered', 'cancelled'].includes(d.status || ''))
+    const completedDeliveries = deliveries.filter((d) => {
+        if (showCancelled) {
+            return ['delivered', 'cancelled'].includes(d.status || '')
+        }
+        return (d.status || '') === 'delivered'
+    })
 
     const canEditDelivery = (delivery: DispatchDelivery) => {
         if (delivery.status === 'cancelled') return false
@@ -278,25 +284,36 @@ export default function DispatchPage() {
             </div>
 
             {/* Tabs */}
-            <div className="flex border-b border-gray-200 mb-4">
-                <button
+            <div className="flex flex-wrap items-center justify-between border-b border-gray-200 mb-4 gap-3">
+                <div className="flex">
+                    <button
                     onClick={() => setActiveTab('todo')}
                     className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'todo' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                >
+                    >
                     A dispatcher ({pendingDeliveries.length})
-                </button>
-                <button
+                    </button>
+                    <button
                     onClick={() => setActiveTab('assigned')}
                     className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'assigned' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                >
+                    >
                     En cours ({assignedDeliveries.length})
-                </button>
-                <button
+                    </button>
+                    <button
                     onClick={() => setActiveTab('done')}
                     className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'done' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                >
+                    >
                     Termine ({completedDeliveries.length})
-                </button>
+                    </button>
+                </div>
+                <label className="flex items-center gap-2 text-xs text-gray-600">
+                    <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                        checked={showCancelled}
+                        onChange={(event) => setShowCancelled(event.target.checked)}
+                    />
+                    Afficher les annulées
+                </label>
             </div>
 
             <div className="table-scroll bg-white shadow sm:rounded-lg">
@@ -316,7 +333,10 @@ export default function DispatchPage() {
                             const filtered = deliveries.filter(d => {
                                 if (activeTab === 'todo') return !d.courier_id && !['delivered', 'cancelled'].includes(d.status || '')
                                 if (activeTab === 'assigned') return d.courier_id && !['delivered', 'cancelled'].includes(d.status || '')
-                                if (activeTab === 'done') return ['delivered', 'cancelled'].includes(d.status || '')
+                                if (activeTab === 'done') {
+                                    if (showCancelled) return ['delivered', 'cancelled'].includes(d.status || '')
+                                    return (d.status || '') === 'delivered'
+                                }
                                 return true
                             })
 
@@ -328,7 +348,9 @@ export default function DispatchPage() {
                                             ? "Tout est dispatche."
                                             : activeTab === 'assigned'
                                                 ? "Aucune course en cours."
-                                                : "Aucune course terminee."}
+                                                : showCancelled
+                                                    ? "Aucune course terminee ou annulee."
+                                                    : "Aucune course terminee."}
                                         </td>
                                     </tr>
                                 )
@@ -342,11 +364,13 @@ export default function DispatchPage() {
                                 const canEdit = canEditDelivery(delivery)
                                 const canAssign = !isDelivered && !isCancelled
                                 const canCancel = canEdit
-                                const statusText = isDelivered
-                                    ? 'Livree'
-                                    : hasCourier
-                                        ? 'En cours'
-                                        : 'Non assignee'
+                                const statusText = isCancelled
+                                    ? 'Annulee'
+                                    : isDelivered
+                                        ? 'Livree'
+                                        : hasCourier
+                                            ? 'En cours'
+                                            : 'Non assignee'
                                 const notesShort = delivery.notes ? delivery.notes.slice(0, 60) : ''
                                 return (
                                     <tr key={delivery.id}>
@@ -377,11 +401,18 @@ export default function DispatchPage() {
                                             {delivery.notes || '-'}
                                         </td>
                                         <td className="hidden lg:table-cell px-6 py-4 whitespace-nowrap text-sm">
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${isDelivered ? 'bg-green-100 text-green-800' :
-                                                hasCourier ? 'bg-emerald-100 text-emerald-800' :
-                                                    'bg-yellow-100 text-yellow-800'
-                                                }`}>
-                                                {isDelivered ? 'Livree' : hasCourier ? 'En cours' : 'Non assigne'}
+                                            <span
+                                                className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                                    isCancelled
+                                                        ? 'bg-red-100 text-red-800'
+                                                        : isDelivered
+                                                            ? 'bg-green-100 text-green-800'
+                                                            : hasCourier
+                                                                ? 'bg-emerald-100 text-emerald-800'
+                                                                : 'bg-yellow-100 text-yellow-800'
+                                                }`}
+                                            >
+                                                {isCancelled ? 'Annulee' : isDelivered ? 'Livree' : hasCourier ? 'En cours' : 'Non assigne'}
                                             </span>
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
@@ -457,11 +488,13 @@ export default function DispatchPage() {
                         )}
                         {recentOps.map((delivery) => {
                             const assignedCourier = couriers.find(c => c.id === delivery.courier_id)
-                            const statusLabel = delivery.status === 'delivered'
-                                ? 'Livree'
-                                : delivery.courier_id
-                                    ? 'Assignee'
-                                    : 'En attente'
+                            const statusLabel = delivery.status === 'cancelled'
+                                ? 'Annulee'
+                                : delivery.status === 'delivered'
+                                    ? 'Livree'
+                                    : delivery.courier_id
+                                        ? 'Assignee'
+                                        : 'En attente'
                             return (
                                 <div key={delivery.id} className="flex items-center justify-between rounded border border-gray-100 px-3 py-2 text-sm">
                                     <div className="space-y-1">

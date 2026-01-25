@@ -292,6 +292,40 @@ def get_my_client(
             columns = [desc[0] for desc in cur.description]
             return dict(zip(columns, row))
 
+@router.get("/me/support")
+def get_my_client_support(
+    user: MeResponse = Depends(require_customer_user),
+    jwt_claims: str = Depends(get_current_user_claims),
+):
+    client_id = user.client_id
+    if not client_id:
+        raise HTTPException(status_code=403, detail="Client access required")
+
+    with get_db_connection(jwt_claims) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ar.id::text, ar.name, ar.contact_email, ar.contact_person, ar.phone
+                FROM client c
+                JOIN city ci ON ci.id = c.city_id
+                JOIN admin_region ar ON ar.id = ci.admin_region_id
+                WHERE c.id = %s
+                """,
+                (client_id,),
+            )
+            row = cur.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Admin region not found for client")
+
+    return {
+        "admin_region_id": row[0],
+        "admin_region_name": row[1],
+        "contact_email": row[2],
+        "contact_person": row[3],
+        "phone": row[4],
+    }
+
 @router.put("/me", response_model=ClientResponse)
 def update_my_client(
     payload: ClientSelfUpdate,

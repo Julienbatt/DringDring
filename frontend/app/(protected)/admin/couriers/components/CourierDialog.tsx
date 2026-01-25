@@ -38,6 +38,23 @@ type CourierDialogProps = {
     onSuccess: () => void
 }
 
+const normalizeChPhoneNumber = (value: string) => {
+    const trimmed = value.trim()
+    if (!trimmed) return ''
+    const digits = trimmed.replace(/\D/g, '')
+    if (!digits) return ''
+    if (trimmed.startsWith('+')) {
+        return `+${digits}`
+    }
+    if (digits.startsWith('41')) {
+        return `+${digits}`
+    }
+    if (digits.startsWith('0') && digits.length === 10) {
+        return `+41${digits.slice(1)}`
+    }
+    return trimmed
+}
+
 export function CourierDialog({ open, onOpenChange, courierToEdit, onSuccess }: CourierDialogProps) {
     const { session, user, adminContextRegion } = useAuth()
     const [loading, setLoading] = useState(false)
@@ -81,10 +98,22 @@ export function CourierDialog({ open, onOpenChange, courierToEdit, onSuccess }: 
             return
         }
 
+        const editing = !!courierToEdit?.id
+        const normalizedPhone = normalizeChPhoneNumber(formData.phone_number || '')
+        if (!editing && !normalizedPhone) {
+            toast.error('Telephone requis au format +41XXXXXXXXX.')
+            return
+        }
+        if (normalizedPhone && !normalizedPhone.startsWith('+41')) {
+            toast.error('Le telephone doit commencer par +41.')
+            return
+        }
+
         setLoading(true)
         try {
             const payload = {
                 ...formData,
+                phone_number: normalizedPhone || null,
                 admin_region_id: user?.role === 'super_admin' ? adminContextRegion?.id : undefined,
             }
 
@@ -166,8 +195,17 @@ export function CourierDialog({ open, onOpenChange, courierToEdit, onSuccess }: 
                             <Input
                                 id="phone"
                                 type="tel"
+                                inputMode="tel"
                                 value={formData.phone_number || ''}
                                 onChange={e => setFormData({ ...formData, phone_number: e.target.value })}
+                                onBlur={() => {
+                                    const normalized = normalizeChPhoneNumber(formData.phone_number || '')
+                                    if (normalized && normalized !== formData.phone_number) {
+                                        setFormData({ ...formData, phone_number: normalized })
+                                    }
+                                }}
+                                placeholder="+41 79 123 45 67"
+                                required={!isEditing}
                             />
                         </div>
                     </div>

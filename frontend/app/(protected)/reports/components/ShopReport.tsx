@@ -84,8 +84,7 @@ const TABLE_COLUMNS = [
   'city_name',
   'bags',
   'status',
-  'total_price',
-  'share_admin_region',
+  'amount_due',
 ]
 
 const TABLE_LABELS: Record<string, string> = {
@@ -95,8 +94,7 @@ const TABLE_LABELS: Record<string, string> = {
     city_name: 'Commune partenaire',
   bags: 'Sacs',
   status: 'Statut',
-  total_price: 'Total CHF',
-  share_admin_region: 'Part entreprise regionale',
+  amount_due: 'Montant facture (TTC)',
 }
 
 const EDITABLE_STATUSES = new Set(['created', 'assigned'])
@@ -965,15 +963,17 @@ export default function ShopReport() {
                 {deliveries.map((row, index) => (
                   <tr key={index} className="odd:bg-white even:bg-gray-50">
                     {TABLE_COLUMNS.map((col) => {
+                      const statusRaw = String(row.status || '')
+                      const isCancelled = statusRaw.toLowerCase() === 'cancelled'
                       const value = row[col]
                       const cell =
-                        col === 'total_price' || col === 'share_admin_region'
-                          ? formatCHF(Number(value))
+                        col === 'amount_due'
+                          ? formatCHF(isCancelled ? 0 : Number(row.share_admin_region || 0))
                           : col === 'status'
                             ? formatStatus(value)
-                          : col === 'delivery_date'
-                            ? formatDate(value)
-                            : String(value ?? '')
+                            : col === 'delivery_date'
+                              ? formatDate(value)
+                              : String(value ?? '')
                       return (
                         <td
                           key={col}

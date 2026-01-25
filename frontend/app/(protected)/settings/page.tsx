@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useMe } from '../hooks/useMe'
 import { toast } from 'sonner'
 import { roleLabel } from '@/lib/roleLabel'
-import { apiGet, apiPost } from '@/lib/api'
+import { apiGet, apiPost, apiPut, apiDelete, API_BASE_URL } from '@/lib/api'
 
 export default function SettingsPage() {
     const router = useRouter()
@@ -18,6 +18,32 @@ export default function SettingsPage() {
     const [vatEffectiveFrom, setVatEffectiveFrom] = useState<string | null>(null)
     const [vatLoading, setVatLoading] = useState(false)
     const [vatSaving, setVatSaving] = useState(false)
+    const [billingLoading, setBillingLoading] = useState(false)
+    const [billingSaving, setBillingSaving] = useState(false)
+    const [logoUploading, setLogoUploading] = useState(false)
+    const [internalBillingLoading, setInternalBillingLoading] = useState(false)
+    const [internalBillingSaving, setInternalBillingSaving] = useState(false)
+    const [internalLogoUploading, setInternalLogoUploading] = useState(false)
+    const [billingForm, setBillingForm] = useState({
+        billing_name: '',
+        billing_iban: '',
+        billing_street: '',
+        billing_house_num: '',
+        billing_postal_code: '',
+        billing_city: '',
+        billing_country: 'CH',
+        billing_logo_path: '',
+    })
+    const [internalBillingForm, setInternalBillingForm] = useState({
+        internal_billing_name: '',
+        internal_billing_iban: '',
+        internal_billing_street: '',
+        internal_billing_house_num: '',
+        internal_billing_postal_code: '',
+        internal_billing_city: '',
+        internal_billing_country: 'CH',
+        internal_billing_logo_path: '',
+    })
 
     useEffect(() => {
         if (user?.role === 'customer') {
@@ -55,6 +81,94 @@ export default function SettingsPage() {
             isActive = false
         }
     }, [user?.role, vatMonth])
+
+    useEffect(() => {
+        if (user?.role !== 'admin_region') return
+        let isActive = true
+        const loadBilling = async () => {
+            setBillingLoading(true)
+            try {
+                const supabase = createClient()
+                const { data: { session } } = await supabase.auth.getSession()
+                if (!session?.access_token) return
+                const data = await apiGet<{
+                    billing_name: string | null
+                    billing_iban: string | null
+                    billing_street: string | null
+                    billing_house_num: string | null
+                    billing_postal_code: string | null
+                    billing_city: string | null
+                    billing_country: string | null
+                    billing_logo_path: string | null
+                }>('/regions/me/billing', session.access_token)
+                if (!isActive) return
+                setBillingForm({
+                    billing_name: data.billing_name || '',
+                    billing_iban: data.billing_iban || '',
+                    billing_street: data.billing_street || '',
+                    billing_house_num: data.billing_house_num || '',
+                    billing_postal_code: data.billing_postal_code || '',
+                    billing_city: data.billing_city || '',
+                    billing_country: data.billing_country || 'CH',
+                    billing_logo_path: data.billing_logo_path || '',
+                })
+            } catch (error: any) {
+                toast.error(`Erreur facturation: ${error.message}`)
+            } finally {
+                if (isActive) {
+                    setBillingLoading(false)
+                }
+            }
+        }
+        loadBilling()
+        return () => {
+            isActive = false
+        }
+    }, [user?.role])
+
+    useEffect(() => {
+        if (user?.role !== 'admin_region') return
+        let isActive = true
+        const loadInternalBilling = async () => {
+            setInternalBillingLoading(true)
+            try {
+                const supabase = createClient()
+                const { data: { session } } = await supabase.auth.getSession()
+                if (!session?.access_token) return
+                const data = await apiGet<{
+                    internal_billing_name: string | null
+                    internal_billing_iban: string | null
+                    internal_billing_street: string | null
+                    internal_billing_house_num: string | null
+                    internal_billing_postal_code: string | null
+                    internal_billing_city: string | null
+                    internal_billing_country: string | null
+                    internal_billing_logo_path: string | null
+                }>('/regions/me/internal-billing', session.access_token)
+                if (!isActive) return
+                setInternalBillingForm({
+                    internal_billing_name: data.internal_billing_name || '',
+                    internal_billing_iban: data.internal_billing_iban || '',
+                    internal_billing_street: data.internal_billing_street || '',
+                    internal_billing_house_num: data.internal_billing_house_num || '',
+                    internal_billing_postal_code: data.internal_billing_postal_code || '',
+                    internal_billing_city: data.internal_billing_city || '',
+                    internal_billing_country: data.internal_billing_country || 'CH',
+                    internal_billing_logo_path: data.internal_billing_logo_path || '',
+                })
+            } catch (error: any) {
+                toast.error(`Erreur facturation interne: ${error.message}`)
+            } finally {
+                if (isActive) {
+                    setInternalBillingLoading(false)
+                }
+            }
+        }
+        loadInternalBilling()
+        return () => {
+            isActive = false
+        }
+    }, [user?.role])
 
     const handlePasswordUpdate = async (e: FormEvent) => {
         e.preventDefault()
@@ -114,6 +228,198 @@ export default function SettingsPage() {
             toast.error(`Erreur TVA: ${error.message}`)
         } finally {
             setVatSaving(false)
+        }
+    }
+
+    const handleBillingUpdate = async (e: FormEvent) => {
+        e.preventDefault()
+        setBillingSaving(true)
+        const supabase = createClient()
+
+        try {
+            const { data: { session } } = await supabase.auth.getSession()
+            if (!session?.access_token) {
+                toast.error('Session invalide')
+                return
+            }
+            const response = await apiPut<typeof billingForm>(
+                '/regions/me/billing',
+                {
+                    billing_name: billingForm.billing_name,
+                    billing_iban: billingForm.billing_iban,
+                    billing_street: billingForm.billing_street,
+                    billing_house_num: billingForm.billing_house_num,
+                    billing_postal_code: billingForm.billing_postal_code,
+                    billing_city: billingForm.billing_city,
+                    billing_country: billingForm.billing_country,
+                },
+                session.access_token
+            )
+            setBillingForm((prev) => ({
+                ...prev,
+                ...response,
+                billing_logo_path: response.billing_logo_path || prev.billing_logo_path,
+            }))
+            toast.success('Parametres de facturation mis a jour')
+        } catch (error: any) {
+            toast.error(`Erreur facturation: ${error.message}`)
+        } finally {
+            setBillingSaving(false)
+        }
+    }
+
+    const handleInternalBillingUpdate = async (e: FormEvent) => {
+        e.preventDefault()
+        setInternalBillingSaving(true)
+        const supabase = createClient()
+
+        try {
+            const { data: { session } } = await supabase.auth.getSession()
+            if (!session?.access_token) {
+                toast.error('Session invalide')
+                return
+            }
+            const response = await apiPut<typeof internalBillingForm>(
+                '/regions/me/internal-billing',
+                {
+                    internal_billing_name: internalBillingForm.internal_billing_name,
+                    internal_billing_iban: internalBillingForm.internal_billing_iban,
+                    internal_billing_street: internalBillingForm.internal_billing_street,
+                    internal_billing_house_num: internalBillingForm.internal_billing_house_num,
+                    internal_billing_postal_code: internalBillingForm.internal_billing_postal_code,
+                    internal_billing_city: internalBillingForm.internal_billing_city,
+                    internal_billing_country: internalBillingForm.internal_billing_country,
+                },
+                session.access_token
+            )
+            setInternalBillingForm((prev) => ({
+                ...prev,
+                ...response,
+                internal_billing_logo_path: response.internal_billing_logo_path || prev.internal_billing_logo_path,
+            }))
+            toast.success('Facturation interne mise a jour')
+        } catch (error: any) {
+            toast.error(`Erreur facturation interne: ${error.message}`)
+        } finally {
+            setInternalBillingSaving(false)
+        }
+    }
+
+    const handleLogoUpload = async (file: File | null) => {
+        if (!file) return
+        if (file.size > 2 * 1024 * 1024) {
+            toast.error('Logo trop volumineux (max 2MB)')
+            return
+        }
+        setLogoUploading(true)
+        const supabase = createClient()
+        try {
+            const { data: { session } } = await supabase.auth.getSession()
+            if (!session?.access_token) {
+                toast.error('Session invalide')
+                return
+            }
+            const form = new FormData()
+            form.append('file', file)
+            const res = await fetch(`${API_BASE_URL}/regions/me/logo`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${session.access_token}`,
+                },
+                body: form,
+            })
+            if (!res.ok) {
+                const text = await res.text()
+                throw new Error(text)
+            }
+            const data = await res.json()
+            setBillingForm((prev) => ({
+                ...prev,
+                billing_logo_path: data.billing_logo_path || '',
+            }))
+            toast.success('Logo charge')
+        } catch (error: any) {
+            toast.error(`Erreur logo: ${error.message}`)
+        } finally {
+            setLogoUploading(false)
+        }
+    }
+
+    const handleLogoRemove = async () => {
+        setLogoUploading(true)
+        const supabase = createClient()
+        try {
+            const { data: { session } } = await supabase.auth.getSession()
+            if (!session?.access_token) {
+                toast.error('Session invalide')
+                return
+            }
+            await apiDelete('/regions/me/logo', session.access_token)
+            setBillingForm((prev) => ({ ...prev, billing_logo_path: '' }))
+            toast.success('Logo supprime')
+        } catch (error: any) {
+            toast.error(`Erreur logo: ${error.message}`)
+        } finally {
+            setLogoUploading(false)
+        }
+    }
+
+    const handleInternalLogoUpload = async (file: File | null) => {
+        if (!file) return
+        if (file.size > 2 * 1024 * 1024) {
+            toast.error('Logo trop volumineux (max 2MB)')
+            return
+        }
+        setInternalLogoUploading(true)
+        const supabase = createClient()
+        try {
+            const { data: { session } } = await supabase.auth.getSession()
+            if (!session?.access_token) {
+                toast.error('Session invalide')
+                return
+            }
+            const form = new FormData()
+            form.append('file', file)
+            const res = await fetch(`${API_BASE_URL}/regions/me/internal-logo`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${session.access_token}`,
+                },
+                body: form,
+            })
+            if (!res.ok) {
+                const text = await res.text()
+                throw new Error(text)
+            }
+            const data = await res.json()
+            setInternalBillingForm((prev) => ({
+                ...prev,
+                internal_billing_logo_path: data.internal_billing_logo_path || '',
+            }))
+            toast.success('Logo interne charge')
+        } catch (error: any) {
+            toast.error(`Erreur logo interne: ${error.message}`)
+        } finally {
+            setInternalLogoUploading(false)
+        }
+    }
+
+    const handleInternalLogoRemove = async () => {
+        setInternalLogoUploading(true)
+        const supabase = createClient()
+        try {
+            const { data: { session } } = await supabase.auth.getSession()
+            if (!session?.access_token) {
+                toast.error('Session invalide')
+                return
+            }
+            await apiDelete('/regions/me/internal-logo', session.access_token)
+            setInternalBillingForm((prev) => ({ ...prev, internal_billing_logo_path: '' }))
+            toast.success('Logo interne supprime')
+        } catch (error: any) {
+            toast.error(`Erreur logo interne: ${error.message}`)
+        } finally {
+            setInternalLogoUploading(false)
         }
     }
 
@@ -219,6 +525,226 @@ export default function SettingsPage() {
                                     className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-50"
                                 >
                                     {vatSaving ? 'Mise a jour...' : 'Mettre a jour la TVA'}
+                                </button>
+                            </div>
+                        </form>
+                    </section>
+                )}
+
+                {user.role === 'admin_region' && (
+                    <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+                        <h2 className="text-base font-semibold text-slate-900">Facturation regionale</h2>
+                        <p className="mt-2 text-sm text-slate-600">
+                            Definissez les coordonnees bancaires et le logo pour les factures de votre region.
+                        </p>
+                        <form onSubmit={handleBillingUpdate} className="mt-4 grid gap-4 md:grid-cols-2">
+                            <div className="md:col-span-2">
+                                <label className="text-sm font-medium text-slate-600">Raison sociale</label>
+                                <input
+                                    type="text"
+                                    value={billingForm.billing_name}
+                                    onChange={(e) => setBillingForm((prev) => ({ ...prev, billing_name: e.target.value }))}
+                                    className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                                />
+                            </div>
+                            <div className="md:col-span-2">
+                                <label className="text-sm font-medium text-slate-600">IBAN</label>
+                                <input
+                                    type="text"
+                                    value={billingForm.billing_iban}
+                                    onChange={(e) => setBillingForm((prev) => ({ ...prev, billing_iban: e.target.value }))}
+                                    placeholder="CHxx xxxx xxxx xxxx xxxx x"
+                                    className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                                />
+                            </div>
+                            <div className="md:col-span-2">
+                                <label className="text-sm font-medium text-slate-600">Rue</label>
+                                <input
+                                    type="text"
+                                    value={billingForm.billing_street}
+                                    onChange={(e) => setBillingForm((prev) => ({ ...prev, billing_street: e.target.value }))}
+                                    className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium text-slate-600">No</label>
+                                <input
+                                    type="text"
+                                    value={billingForm.billing_house_num}
+                                    onChange={(e) => setBillingForm((prev) => ({ ...prev, billing_house_num: e.target.value }))}
+                                    className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium text-slate-600">NPA</label>
+                                <input
+                                    type="text"
+                                    value={billingForm.billing_postal_code}
+                                    onChange={(e) => setBillingForm((prev) => ({ ...prev, billing_postal_code: e.target.value }))}
+                                    className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium text-slate-600">Ville</label>
+                                <input
+                                    type="text"
+                                    value={billingForm.billing_city}
+                                    onChange={(e) => setBillingForm((prev) => ({ ...prev, billing_city: e.target.value }))}
+                                    className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium text-slate-600">Pays</label>
+                                <input
+                                    type="text"
+                                    value={billingForm.billing_country}
+                                    onChange={(e) => setBillingForm((prev) => ({ ...prev, billing_country: e.target.value }))}
+                                    className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                                />
+                            </div>
+                            <div className="md:col-span-2">
+                                <label className="text-sm font-medium text-slate-600">Logo facture</label>
+                                <div className="mt-2 flex flex-wrap items-center gap-3">
+                                    <input
+                                        type="file"
+                                        accept="image/png,image/jpeg"
+                                        onChange={(e) => handleLogoUpload(e.target.files?.[0] || null)}
+                                        disabled={logoUploading}
+                                        className="block text-sm text-slate-600 file:mr-3 file:rounded-full file:border-0 file:bg-slate-100 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-200"
+                                    />
+                                    <span className="text-xs text-slate-400">
+                                        {billingForm.billing_logo_path ? 'Logo charge' : 'Aucun logo'}
+                                    </span>
+                                    {billingForm.billing_logo_path && (
+                                        <button
+                                            type="button"
+                                            onClick={handleLogoRemove}
+                                            disabled={logoUploading}
+                                            className="text-xs font-semibold text-red-600 hover:text-red-700 disabled:opacity-50"
+                                        >
+                                            Supprimer
+                                        </button>
+                                    )}
+                                </div>
+                                <p className="mt-1 text-xs text-slate-400">Formats PNG/JPEG, max 2MB.</p>
+                            </div>
+                            <div className="md:col-span-2 flex justify-end">
+                                <button
+                                    type="submit"
+                                    disabled={billingSaving || billingLoading}
+                                    className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-50"
+                                >
+                                    {billingSaving ? 'Mise a jour...' : 'Mettre a jour la facturation'}
+                                </button>
+                            </div>
+                        </form>
+                    </section>
+                )}
+
+                {user.role === 'admin_region' && (
+                    <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+                        <h2 className="text-base font-semibold text-slate-900">Facturation interne (prestataire)</h2>
+                        <p className="mt-2 text-sm text-slate-600">
+                            Utilise pour la facture interne du prestataire de livraison vers l&apos;association.
+                        </p>
+                        <form onSubmit={handleInternalBillingUpdate} className="mt-4 grid gap-4 md:grid-cols-2">
+                            <div className="md:col-span-2">
+                                <label className="text-sm font-medium text-slate-600">Raison sociale</label>
+                                <input
+                                    type="text"
+                                    value={internalBillingForm.internal_billing_name}
+                                    onChange={(e) => setInternalBillingForm((prev) => ({ ...prev, internal_billing_name: e.target.value }))}
+                                    className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                                />
+                            </div>
+                            <div className="md:col-span-2">
+                                <label className="text-sm font-medium text-slate-600">IBAN</label>
+                                <input
+                                    type="text"
+                                    value={internalBillingForm.internal_billing_iban}
+                                    onChange={(e) => setInternalBillingForm((prev) => ({ ...prev, internal_billing_iban: e.target.value }))}
+                                    placeholder="CHxx xxxx xxxx xxxx xxxx x"
+                                    className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                                />
+                            </div>
+                            <div className="md:col-span-2">
+                                <label className="text-sm font-medium text-slate-600">Rue</label>
+                                <input
+                                    type="text"
+                                    value={internalBillingForm.internal_billing_street}
+                                    onChange={(e) => setInternalBillingForm((prev) => ({ ...prev, internal_billing_street: e.target.value }))}
+                                    className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium text-slate-600">No</label>
+                                <input
+                                    type="text"
+                                    value={internalBillingForm.internal_billing_house_num}
+                                    onChange={(e) => setInternalBillingForm((prev) => ({ ...prev, internal_billing_house_num: e.target.value }))}
+                                    className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium text-slate-600">NPA</label>
+                                <input
+                                    type="text"
+                                    value={internalBillingForm.internal_billing_postal_code}
+                                    onChange={(e) => setInternalBillingForm((prev) => ({ ...prev, internal_billing_postal_code: e.target.value }))}
+                                    className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium text-slate-600">Ville</label>
+                                <input
+                                    type="text"
+                                    value={internalBillingForm.internal_billing_city}
+                                    onChange={(e) => setInternalBillingForm((prev) => ({ ...prev, internal_billing_city: e.target.value }))}
+                                    className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium text-slate-600">Pays</label>
+                                <input
+                                    type="text"
+                                    value={internalBillingForm.internal_billing_country}
+                                    onChange={(e) => setInternalBillingForm((prev) => ({ ...prev, internal_billing_country: e.target.value }))}
+                                    className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-400 focus:outline-none"
+                                />
+                            </div>
+                            <div className="md:col-span-2">
+                                <label className="text-sm font-medium text-slate-600">Logo interne</label>
+                                <div className="mt-2 flex flex-wrap items-center gap-3">
+                                    <input
+                                        type="file"
+                                        accept="image/png,image/jpeg"
+                                        onChange={(e) => handleInternalLogoUpload(e.target.files?.[0] || null)}
+                                        disabled={internalLogoUploading}
+                                        className="block text-sm text-slate-600 file:mr-3 file:rounded-full file:border-0 file:bg-slate-100 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-200"
+                                    />
+                                    <span className="text-xs text-slate-400">
+                                        {internalBillingForm.internal_billing_logo_path ? 'Logo charge' : 'Aucun logo'}
+                                    </span>
+                                    {internalBillingForm.internal_billing_logo_path && (
+                                        <button
+                                            type="button"
+                                            onClick={handleInternalLogoRemove}
+                                            disabled={internalLogoUploading}
+                                            className="text-xs font-semibold text-red-600 hover:text-red-700 disabled:opacity-50"
+                                        >
+                                            Supprimer
+                                        </button>
+                                    )}
+                                </div>
+                                <p className="mt-1 text-xs text-slate-400">Formats PNG/JPEG, max 2MB.</p>
+                            </div>
+                            <div className="md:col-span-2 flex justify-end">
+                                <button
+                                    type="submit"
+                                    disabled={internalBillingSaving || internalBillingLoading}
+                                    className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-50"
+                                >
+                                    {internalBillingSaving ? 'Mise a jour...' : 'Mettre a jour la facturation interne'}
                                 </button>
                             </div>
                         </form>

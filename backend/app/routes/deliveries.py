@@ -661,6 +661,7 @@ def export_shop_deliveries(
                 WHERE d.shop_id = %s
                   AND date_trunc('month', d.delivery_date)
                     = date_trunc('month', %s::date)
+                  AND COALESCE(st.status, '') <> 'cancelled'
                 ORDER BY d.delivery_date
                 """,
                 (shop_id, period_month),
@@ -1192,14 +1193,22 @@ def _apply_delivery_update(
         raise HTTPException(status_code=403, detail="Not in your shop")
 
     status, status_updated_at = _get_latest_status(cur, delivery_id)
-    if not _can_edit_delivery(status, status_updated_at, delivery_date):
-        raise HTTPException(status_code=409, detail="Delivery is locked")
+    can_edit_basic = _can_edit_delivery(status, status_updated_at, delivery_date)
 
     old_month = delivery_date.replace(day=1)
     new_delivery_date = payload.delivery_date or delivery_date
     new_month = new_delivery_date.replace(day=1)
 
-    if _is_period_frozen(cur, shop_id, old_month) or _is_period_frozen(cur, shop_id, new_month):
+    old_frozen = _is_period_frozen(cur, shop_id, old_month)
+    new_frozen = _is_period_frozen(cur, shop_id, new_month)
+    is_frozen = old_frozen or new_frozen
+
+    if not can_edit_basic:
+        # Allow delivered edits while the period is not frozen ("before freeze")
+        if not (status in {"delivered", "cancelled"} and not is_frozen):
+            raise HTTPException(status_code=409, detail="Delivery is locked")
+
+    if status in EDITABLE_STATUSES and is_frozen:
         raise HTTPException(status_code=409, detail="Billing period is frozen")
 
     new_time_window = payload.time_window if payload.time_window is not None else time_window
@@ -1350,10 +1359,15 @@ def _apply_delivery_cancel(
         raise HTTPException(status_code=403, detail="Not in your shop")
 
     status, status_updated_at = _get_latest_status(cur, delivery_id)
-    if not _can_edit_delivery(status, status_updated_at, delivery_date):
-        raise HTTPException(status_code=409, detail="Delivery is locked")
+    can_edit_basic = _can_edit_delivery(status, status_updated_at, delivery_date)
+    is_frozen = _is_period_frozen(cur, shop_id, delivery_date.replace(day=1))
 
-    if _is_period_frozen(cur, shop_id, delivery_date.replace(day=1)):
+    if not can_edit_basic:
+        # Allow delivered cancels while the period is not frozen ("before freeze")
+        if not (status in {"delivered", "cancelled"} and not is_frozen):
+            raise HTTPException(status_code=409, detail="Delivery is locked")
+
+    if status in EDITABLE_STATUSES and is_frozen:
         raise HTTPException(status_code=409, detail="Billing period is frozen")
 
     if reason:

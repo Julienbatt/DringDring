@@ -6,7 +6,7 @@ import { useAuth } from '@/app/(protected)/providers/AuthProvider'
 import { useEcoStats } from '@/app/(protected)/hooks/useEcoStats'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
-import { Package, Clock, ShoppingBag, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { Package, Clock, ShoppingBag, CheckCircle2, AlertTriangle, MapPin } from 'lucide-react'
 
 type CustomerDelivery = {
     delivery_id: string
@@ -25,6 +25,9 @@ export default function CustomerDeliveriesPage() {
     const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'delivered'>('all')
     const currentMonth = format(new Date(), 'yyyy-MM')
     const { data: ecoStats, loading: ecoLoading } = useEcoStats(currentMonth)
+    const monthlyDeliveries = useMemo(() => {
+        return deliveries.filter((item) => format(new Date(item.delivery_date), 'yyyy-MM') === currentMonth)
+    }, [deliveries, currentMonth])
 
     useEffect(() => {
         if (session?.access_token) {
@@ -69,15 +72,15 @@ export default function CustomerDeliveriesPage() {
     const statusConfig = (status: string | null) => {
         switch (status) {
             case 'delivered':
-                return { label: 'Livree', tone: 'text-emerald-600 bg-emerald-50 border-emerald-200' }
+                return { label: 'Livree', tone: 'text-emerald-600 bg-emerald-50 border-emerald-200', icon: CheckCircle2 }
             case 'picked_up':
-                return { label: 'En route', tone: 'text-sky-700 bg-sky-50 border-sky-200' }
+                return { label: 'En route', tone: 'text-sky-700 bg-sky-50 border-sky-200', icon: MapPin }
             case 'issue':
-                return { label: 'Incident', tone: 'text-red-600 bg-red-50 border-red-200' }
+                return { label: 'Incident', tone: 'text-red-600 bg-red-50 border-red-200', icon: AlertTriangle }
             case 'cancelled':
-                return { label: 'Annulee', tone: 'text-slate-500 bg-slate-100 border-slate-200' }
+                return { label: 'Annulee', tone: 'text-slate-500 bg-slate-100 border-slate-200', icon: AlertTriangle }
             default:
-                return { label: 'Planifiee', tone: 'text-amber-700 bg-amber-50 border-amber-200' }
+                return { label: 'Planifiee', tone: 'text-amber-700 bg-amber-50 border-amber-200', icon: Clock }
         }
     }
 
@@ -101,10 +104,12 @@ export default function CustomerDeliveriesPage() {
                             {totals.active} en cours
                         </div>
                     </div>
-                    <div className="grid gap-4 md:grid-cols-5">
+                    <div className="grid gap-4 md:grid-cols-4">
                         <div className="rounded-2xl border border-slate-100 bg-white p-4">
-                            <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Total</p>
-                            <p className="text-2xl font-semibold text-slate-900">{totals.total}</p>
+                            <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Livraisons (mois)</p>
+                            <p className="text-2xl font-semibold text-slate-900">
+                                {ecoLoading || !ecoStats ? monthlyDeliveries.length : ecoStats.deliveries}
+                            </p>
                         </div>
                         <div className="rounded-2xl border border-slate-100 bg-white p-4">
                             <p className="text-xs uppercase tracking-[0.2em] text-slate-400">En cours</p>
@@ -115,15 +120,12 @@ export default function CustomerDeliveriesPage() {
                             <p className="text-2xl font-semibold text-emerald-700">{totals.delivered}</p>
                         </div>
                         <div className="rounded-2xl border border-slate-100 bg-white p-4">
-                            <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Km a velo (mois)</p>
-                            <p className="text-2xl font-semibold text-emerald-700">
-                                {ecoLoading || !ecoStats ? '-' : ecoStats.distance_km.toFixed(1)}
-                            </p>
-                        </div>
-                        <div className="rounded-2xl border border-slate-100 bg-white p-4">
                             <p className="text-xs uppercase tracking-[0.2em] text-slate-400">CO2 economise (kg)</p>
                             <p className="text-2xl font-semibold text-emerald-700">
                                 {ecoLoading || !ecoStats ? '-' : ecoStats.co2_saved_kg.toFixed(1)}
+                            </p>
+                            <p className="text-xs text-slate-400">
+                                {ecoLoading || !ecoStats ? '' : `${ecoStats.distance_km.toFixed(1)} km a velo`}
                             </p>
                         </div>
                     </div>
@@ -162,6 +164,11 @@ export default function CustomerDeliveriesPage() {
                                 <div className="space-y-4 border-l border-slate-200 pl-6">
                                     {monthDeliveries.map((delivery) => {
                                         const status = statusConfig(delivery.status)
+                                        const StatusIcon = status.icon
+                                        const updatedAt = delivery.status_updated_at || delivery.delivery_date
+                                        const updatedLabel = updatedAt
+                                            ? format(new Date(updatedAt), 'HH:mm', { locale: fr })
+                                            : ''
                                         return (
                                             <div key={delivery.delivery_id} className="relative rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
                                                 <div className="absolute -left-[30px] top-6 h-3 w-3 rounded-full border-2 border-emerald-400 bg-white"></div>
@@ -187,13 +194,10 @@ export default function CustomerDeliveriesPage() {
                                                         <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${status.tone}`}>
                                                             {status.label}
                                                         </span>
-                                                        {delivery.status === 'delivered' ? (
-                                                            <CheckCircle2 className="h-6 w-6 text-emerald-500" />
-                                                        ) : delivery.status === 'issue' ? (
-                                                            <AlertTriangle className="h-6 w-6 text-red-500" />
-                                                        ) : (
-                                                            <div className="h-6 w-6 rounded-full border-2 border-sky-400 border-t-transparent animate-spin" />
-                                                        )}
+                                                        {StatusIcon ? (
+                                                            <StatusIcon className="h-6 w-6 text-slate-500" />
+                                                        ) : null}
+                                                        <span className="text-xs text-slate-500">Maj: {updatedLabel}</span>
                                                     </div>
                                                 </div>
                                             </div>

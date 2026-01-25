@@ -12,6 +12,13 @@ Ce document détaille le plan de mise à niveau du système de facturation pour 
 ## 2. Architecture de Données (Phase 1)
 Nous devons passer d'un modèle "Shop-Centric" à un modèle "Payeur-Centric".
 
+## Implementation status (2026-01-22)
+- Tables live: `billing_run`, `billing_document`, `billing_document_line` (not `invoices`).
+- Recipient types: `COMMUNE`, `HQ`, `SHOP_INDEP`, `INTERNAL`.
+- External invoices use admin_region `billing_*` as the creditor (regional billing form).
+- Internal invoice uses admin_region `internal_billing_*` as the creditor; recipient is the regional billing entity (billing form); amount is the full `total_price` sum.
+- `billing_document` stores recipient snapshots + creditor snapshots; preview=0 freezes WORM PDFs in `billing-pdf` (`pdf_url`, `pdf_sha256`, `pdf_generated_at`).
+
 ### Nouvelle Table : `invoices`
 Cette table centralise tous les documents de facturation générés.
 

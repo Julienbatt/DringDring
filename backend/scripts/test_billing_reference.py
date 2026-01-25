@@ -46,7 +46,7 @@ def _validate_qrr(reference: str) -> bool:
 
 
 def main() -> None:
-    rf_iban = "CH4431999123000889012"
+    rf_iban = "CH9300762011623852957"
     qrr_iban = "CH4430000123456789012"
     seed = "SHOP-TEST-123"
 

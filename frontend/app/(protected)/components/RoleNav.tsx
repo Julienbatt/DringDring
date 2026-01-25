@@ -21,6 +21,7 @@ const NAV_ITEMS = [
   { label: 'Facturation', href: '/shop/billing', roles: ['shop'] },
   { label: 'Historique', href: '/customer/deliveries', roles: ['customer'] },
   { label: 'Mon compte', href: '/customer/profile', roles: ['customer'] },
+  { label: 'Aide & support', href: '/customer/support', roles: ['customer'] },
   { label: 'Parametres', href: '/settings', roles: ['shop', 'admin_region', 'super_admin', 'courier', 'city', 'hq'] },
 ]
 
