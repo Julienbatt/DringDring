@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useHqBilling } from '../../hq/hooks/useHqBilling'
 import { useHqBillingShops } from '../../hq/hooks/useHqBillingShops'
+import { useHqStats } from '../../hq/hooks/useHqStats'
 import { API_BASE_URL } from '@/lib/api'
 import { useEcoStats } from '@/app/(protected)/hooks/useEcoStats'
 import { useAuth } from '@/app/(protected)/providers/AuthProvider'
@@ -126,6 +127,11 @@ export default function HqReport() {
   )
   const { data: ecoStats, loading: ecoLoading } = useEcoStats(selectedMonth)
   const { user } = useAuth()
+  const {
+    data: hqStats,
+    loading: hqStatsLoading,
+    error: hqStatsError,
+  } = useHqStats(selectedMonth)
 
   const { data, loading, error } = useHqBilling(selectedMonth)
   const { data: shopData, loading: shopLoading, error: shopError } =
@@ -169,6 +175,12 @@ export default function HqReport() {
     (sum, row) => sum + Number(row.total_volume_chf ?? 0),
     0
   )
+  const averageSubventionPerDelivery =
+    totalDeliveries > 0
+      ? (hqStats?.total_subvention_chf ?? totalSubvention) / totalDeliveries
+      : 0
+  const totalBasketValue = hqStats?.total_basket_value_chf ?? 0
+  const averageBasketValue = hqStats?.average_basket_value_chf ?? 0
 
   const hqName = filteredRows[0]?.hq_name ?? filteredRows[0]?.hq_id ?? 'Groupe'
   const detailRows = shopData ?? []
@@ -262,6 +274,88 @@ export default function HqReport() {
             ))}
           </div>
         )}
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-sm font-medium text-gray-700">
+          Valeur pour le groupe
+        </h2>
+        {hqStatsLoading ? (
+          <div className="text-sm text-gray-500">Chargement...</div>
+        ) : hqStatsError ? (
+          <div className="text-sm text-red-600">{hqStatsError}</div>
+        ) : hqStats ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="rounded-lg border p-4">
+              <div className="text-sm text-gray-500">Clients servis</div>
+              <div className="text-2xl font-semibold">{hqStats.unique_clients}</div>
+              <div className="text-xs text-gray-400">Menages servis</div>
+            </div>
+            <div className="rounded-lg border p-4">
+              <div className="text-sm text-gray-500">Commerces actifs</div>
+              <div className="text-2xl font-semibold">{hqStats.active_shops}</div>
+              <div className="text-xs text-gray-400">Ce mois</div>
+            </div>
+            <div className="rounded-lg border p-4">
+              <div className="text-sm text-gray-500">Communes couvertes</div>
+              <div className="text-2xl font-semibold">{hqStats.active_cities}</div>
+              <div className="text-xs text-gray-400">Réseau local</div>
+            </div>
+            <div className="rounded-lg border p-4">
+              <div className="text-sm text-gray-500">Subvention / livraison</div>
+              <div className="text-2xl font-semibold">
+                {formatCHF(averageSubventionPerDelivery)}
+              </div>
+              <div className="text-xs text-gray-400">Moyenne du mois</div>
+            </div>
+            <div className="rounded-lg border p-4">
+              <div className="text-sm text-gray-500">Montant des courses</div>
+              <div className="text-2xl font-semibold">
+                {formatCHF(totalBasketValue)}
+              </div>
+              <div className="text-xs text-gray-400">
+                Panier moyen: {formatCHF(averageBasketValue)}
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="rounded-lg border p-4">
+          <div className="text-sm text-gray-500">Sacs livres</div>
+          <div className="text-2xl font-semibold">
+            {hqStatsLoading || !hqStats ? '-' : hqStats.total_bags}
+          </div>
+          <div className="text-xs text-gray-400">
+            {hqStatsLoading || !hqStats ? '' : `Moyenne: ${hqStats.average_bags.toFixed(1)}`}
+          </div>
+        </div>
+        <div className="rounded-lg border p-4">
+          <div className="text-sm text-gray-500">Jours actifs</div>
+          <div className="text-2xl font-semibold">
+            {hqStatsLoading || !hqStats ? '-' : hqStats.active_days}
+          </div>
+          <div className="text-xs text-gray-400">Mois en cours</div>
+        </div>
+        <div className="rounded-lg border p-4">
+          <div className="text-sm text-gray-500">Livraisons / jour</div>
+          <div className="text-2xl font-semibold">
+            {hqStatsLoading || !hqStats ? '-' : hqStats.deliveries_per_active_day.toFixed(1)}
+          </div>
+          <div className="text-xs text-gray-400">Jours actifs</div>
+        </div>
+        <div className="rounded-lg border p-4">
+          <div className="text-sm text-gray-500">Evolution livraisons</div>
+          <div className="text-2xl font-semibold">
+            {hqStatsLoading || !hqStats
+              ? '-'
+              : `${hqStats.deliveries_change_pct === null ? 'n/a' : `${hqStats.deliveries_change_pct > 0 ? '+' : ''}${hqStats.deliveries_change_pct.toFixed(1)}%`}`}
+          </div>
+          <div className="text-xs text-gray-400">
+            {hqStatsLoading || !hqStats ? '' : `Vs ${hqStats.previous_month}`}
+          </div>
+        </div>
       </section>
 
       <section className="grid grid-cols-1 sm:grid-cols-2 gap-4">

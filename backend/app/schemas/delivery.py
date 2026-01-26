@@ -23,6 +23,7 @@ class DeliveryCreate(BaseModel):
 
     # Inputs tarifaires
     order_amount: Optional[float] = None
+    basket_value: Optional[float] = None
     is_cms: bool = False
 
 
@@ -32,6 +33,7 @@ class ShopDeliveryCreate(BaseModel):
     time_window: str
     bags: int = Field(ge=1, le=20)
     order_amount: Optional[float] = None
+    basket_value: Optional[float] = None
     notes: Optional[str] = None
 
 
@@ -40,6 +42,7 @@ class ShopDeliveryUpdate(BaseModel):
     time_window: Optional[str] = None
     bags: Optional[int] = Field(default=None, ge=1, le=20)
     order_amount: Optional[float] = None
+    basket_value: Optional[float] = None
     notes: Optional[str] = None
 
 

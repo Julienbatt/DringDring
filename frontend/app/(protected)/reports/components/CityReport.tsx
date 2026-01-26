@@ -180,6 +180,15 @@ export default function CityReport() {
     0
   )
 
+  const subventionBase =
+    cityStats?.total_subvention_chf ?? totalSubvention
+  const averageSubventionPerDelivery =
+    totalDeliveries > 0 ? subventionBase / totalDeliveries : 0
+  const averageSubventionPerBeneficiary =
+    cityStats && cityStats.unique_clients > 0
+      ? subventionBase / cityStats.unique_clients
+      : 0
+
   const cityName = data[0]?.city_name ?? data[0]?.city_id ?? 'Commune partenaire'
   const cityId = data[0]?.city_id ?? ''
   const detailRows = shopData ?? []
@@ -250,7 +259,7 @@ export default function CityReport() {
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium text-gray-700">
-          Impact local
+          Valeur pour la commune
         </h2>
         {statsLoading ? (
           <div className="text-sm text-gray-500">Chargement...</div>
@@ -264,29 +273,52 @@ export default function CityReport() {
               <div className="text-xs text-gray-400">Menages servis</div>
             </div>
             <div className="rounded-lg border p-4">
+              <div className="text-sm text-gray-500">Beneficiaires CMS</div>
+              <div className="text-2xl font-semibold">{cityStats.cms_unique_clients}</div>
+              <div className="text-xs text-gray-400">Public prioritaire</div>
+            </div>
+            <div className="rounded-lg border p-4">
               <div className="text-sm text-gray-500">Commerces actifs</div>
               <div className="text-2xl font-semibold">{cityStats.active_shops}</div>
               <div className="text-xs text-gray-400">Ce mois</div>
             </div>
             <div className="rounded-lg border p-4">
-              <div className="text-sm text-gray-500">Livraisons CMS</div>
-              <div className="text-2xl font-semibold">{cityStats.cms_deliveries}</div>
-              <div className="text-xs text-gray-400">
-                {cityStats.cms_share_pct.toFixed(1)}% des livraisons
+              <div className="text-sm text-gray-500">Subvention / livraison</div>
+              <div className="text-2xl font-semibold">
+                {formatCHF(averageSubventionPerDelivery)}
               </div>
+              <div className="text-xs text-gray-400">Moyenne du mois</div>
             </div>
             <div className="rounded-lg border p-4">
-              <div className="text-sm text-gray-500">Sacs moyens</div>
-              <div className="text-2xl font-semibold">{cityStats.average_bags.toFixed(1)}</div>
-              <div className="text-xs text-gray-400">
-                Total sacs: {cityStats.total_bags}
+              <div className="text-sm text-gray-500">Subvention / beneficiaire</div>
+              <div className="text-2xl font-semibold">
+                {formatCHF(averageSubventionPerBeneficiary)}
               </div>
+              <div className="text-xs text-gray-400">Par menage servi</div>
             </div>
           </div>
         ) : null}
       </section>
 
-      <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="rounded-lg border p-4">
+          <div className="text-sm text-gray-500">Livraisons CMS</div>
+          <div className="text-2xl font-semibold">
+            {statsLoading || !cityStats ? '-' : cityStats.cms_deliveries}
+          </div>
+          <div className="text-xs text-gray-400">
+            {statsLoading || !cityStats ? '' : `${cityStats.cms_share_pct.toFixed(1)}% des livraisons`}
+          </div>
+        </div>
+        <div className="rounded-lg border p-4">
+          <div className="text-sm text-gray-500">Sacs moyens</div>
+          <div className="text-2xl font-semibold">
+            {statsLoading || !cityStats ? '-' : cityStats.average_bags.toFixed(1)}
+          </div>
+          <div className="text-xs text-gray-400">
+            {statsLoading || !cityStats ? '' : `Total sacs: ${cityStats.total_bags}`}
+          </div>
+        </div>
         <div className="rounded-lg border p-4">
           <div className="text-sm text-gray-500">Jours actifs</div>
           <div className="text-2xl font-semibold">
@@ -300,15 +332,6 @@ export default function CityReport() {
             {statsLoading || !cityStats ? '-' : cityStats.deliveries_per_active_day.toFixed(1)}
           </div>
           <div className="text-xs text-gray-400">Jours actifs</div>
-        </div>
-        <div className="rounded-lg border p-4">
-          <div className="text-sm text-gray-500">Evolution livraisons</div>
-          <div className="text-2xl font-semibold">
-            {statsLoading || !cityStats ? '-' : formatPercent(cityStats.deliveries_change_pct)}
-          </div>
-          <div className="text-xs text-gray-400">
-            {statsLoading || !cityStats ? '' : `Vs ${cityStats.previous_month}`}
-          </div>
         </div>
       </section>
 

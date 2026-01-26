@@ -40,6 +40,7 @@ type CityDeliveryRow = {
   postal_code: string | null
   delivery_city: string | null
   bags: number | null
+  is_cms: boolean | null
   time_window: string | null
   total_price: number | string | null
   share_city: number | string | null
@@ -61,6 +62,7 @@ export default function CityBillingPage() {
   const [shops, setShops] = useState<CityShopRow[]>([])
   const [deliveries, setDeliveries] = useState<CityDeliveryRow[]>([])
   const [selectedShopId, setSelectedShopId] = useState('all')
+  const [audienceFilter, setAudienceFilter] = useState<'all' | 'cms' | 'non_cms'>('all')
   const [loading, setLoading] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
 
@@ -178,9 +180,21 @@ export default function CityBillingPage() {
     }
   }
 
-  const visibleDetails = selectedShopId === 'all'
+  const filteredByShop = selectedShopId === 'all'
     ? deliveries
     : deliveries.filter((row) => row.shop_id === selectedShopId)
+
+  const visibleDetails =
+    audienceFilter === 'all'
+      ? filteredByShop
+      : filteredByShop.filter((row) =>
+          audienceFilter === 'cms' ? row.is_cms : !row.is_cms
+        )
+
+  const cmsDeliveries = deliveries.filter((row) => row.is_cms).length
+  const cmsSharePct = deliveries.length
+    ? (cmsDeliveries / deliveries.length) * 100
+    : 0
 
   return (
     <div className="p-8 space-y-6">
@@ -222,6 +236,23 @@ export default function CityBillingPage() {
           <div className="text-sm font-medium text-muted-foreground">Subvention communale</div>
           <div className="text-2xl font-bold">
             CHF {Number(summary?.total_amount_due || 0).toLocaleString('fr-CH', { minimumFractionDigits: 2 })}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="rounded-xl border bg-card text-card-foreground shadow p-6">
+          <div className="text-sm font-medium text-muted-foreground">Livraisons CMS</div>
+          <div className="text-2xl font-bold">{cmsDeliveries}</div>
+          <div className="text-xs text-muted-foreground">
+            {cmsSharePct.toFixed(1)}% des livraisons
+          </div>
+        </div>
+        <div className="rounded-xl border bg-card text-card-foreground shadow p-6">
+          <div className="text-sm font-medium text-muted-foreground">Public prioritaire</div>
+          <div className="text-2xl font-bold">CMS</div>
+          <div className="text-xs text-muted-foreground">
+            Personnes agees ou a mobilite reduite
           </div>
         </div>
       </div>
@@ -272,21 +303,34 @@ export default function CityBillingPage() {
           <div>
             <div className="text-lg font-semibold">Detail des courses</div>
             <div className="text-sm text-muted-foreground">
-              Filtrez par commerce pour consulter le detail.
+              Filtrez par commerce ou public pour consulter le detail.
             </div>
           </div>
-          <select
-            className="border rounded px-3 py-2 text-sm"
-            value={selectedShopId}
-            onChange={(e) => setSelectedShopId(e.target.value)}
-          >
-            <option value="all">Tous les commerces</option>
-            {shops.map((row) => (
-              <option key={row.shop_id} value={row.shop_id}>
-                {row.shop_name}
-              </option>
-            ))}
-          </select>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <select
+              className="border rounded px-3 py-2 text-sm"
+              value={selectedShopId}
+              onChange={(e) => setSelectedShopId(e.target.value)}
+            >
+              <option value="all">Tous les commerces</option>
+              {shops.map((row) => (
+                <option key={row.shop_id} value={row.shop_id}>
+                  {row.shop_name}
+                </option>
+              ))}
+            </select>
+            <select
+              className="border rounded px-3 py-2 text-sm"
+              value={audienceFilter}
+              onChange={(e) =>
+                setAudienceFilter(e.target.value as 'all' | 'cms' | 'non_cms')
+              }
+            >
+              <option value="all">Tous les publics</option>
+              <option value="cms">Public CMS</option>
+              <option value="non_cms">Public standard</option>
+            </select>
+          </div>
         </div>
 
         <Table>
@@ -298,6 +342,7 @@ export default function CityBillingPage() {
               <TableHead>Adresse</TableHead>
               <TableHead>NPA</TableHead>
               <TableHead>Commune</TableHead>
+              <TableHead>Public</TableHead>
               <TableHead className="text-right">Sacs</TableHead>
               <TableHead className="text-right">Total CHF</TableHead>
               <TableHead className="text-right">Part commune</TableHead>
@@ -308,11 +353,11 @@ export default function CityBillingPage() {
           <TableBody>
             {detailLoading ? (
               <TableRow>
-                <TableCell colSpan={11} className="h-20 text-center">Chargement...</TableCell>
+                <TableCell colSpan={12} className="h-20 text-center">Chargement...</TableCell>
               </TableRow>
             ) : visibleDetails.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="h-20 text-center text-muted-foreground">
+                <TableCell colSpan={12} className="h-20 text-center text-muted-foreground">
                   Aucune livraison pour cette periode.
                 </TableCell>
               </TableRow>
@@ -325,6 +370,7 @@ export default function CityBillingPage() {
                   <TableCell>{row.address || '-'}</TableCell>
                   <TableCell>{row.postal_code || '-'}</TableCell>
                   <TableCell>{row.delivery_city || row.city_name}</TableCell>
+                  <TableCell>{row.is_cms ? 'CMS' : 'Standard'}</TableCell>
                   <TableCell className="text-right">{row.bags ?? '-'}</TableCell>
                   <TableCell className="text-right">
                     CHF {Number(row.total_price || 0).toLocaleString('fr-CH', { minimumFractionDigits: 2 })}

@@ -25,8 +25,8 @@ function getToday() {
   return `${now.getFullYear()}-${month}-${day}`
 }
 
-function formatCHF(value: number | null) {
-  if (value === null || Number.isNaN(value)) return ''
+function formatCHF(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) return ''
   return `CHF ${value.toLocaleString('fr-CH', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -83,6 +83,7 @@ const TABLE_COLUMNS = [
   'address',
   'city_name',
   'bags',
+  'basket_value',
   'status',
   'amount_due',
 ]
@@ -93,6 +94,7 @@ const TABLE_LABELS: Record<string, string> = {
   address: 'Adresse',
     city_name: 'Commune partenaire',
   bags: 'Sacs',
+  basket_value: 'Valeur des courses (CHF)',
   status: 'Statut',
   amount_due: 'Montant facture (TTC)',
 }
@@ -146,6 +148,7 @@ type FormState = {
   time_window: string
   bags: string | number
   order_amount: string | number
+  basket_value: string | number
   notes: string
   [key: string]: any
 }
@@ -161,6 +164,7 @@ export default function ShopReport() {
     time_window: '',
     bags: '',
     order_amount: '',
+    basket_value: '',
     notes: '',
   })
   const [isCreatingClient, setIsCreatingClient] = useState(false)
@@ -400,6 +404,7 @@ export default function ShopReport() {
           time_window: formState.time_window,
           bags: bagCount,
           order_amount: formState.order_amount ? Number(formState.order_amount) : null,
+          basket_value: formState.basket_value ? Number(formState.basket_value) : null,
           notes: formState.notes,
         }
         await apiPatch(`/deliveries/shop/${editingDeliveryId}`, payload, session.access_token)
@@ -411,6 +416,7 @@ export default function ShopReport() {
           time_window: formState.time_window,
           bags: bagCount,
           order_amount: formState.order_amount ? Number(formState.order_amount) : null,
+          basket_value: formState.basket_value ? Number(formState.basket_value) : null,
           notes: formState.notes,
         }
         await apiPost('/deliveries/shop', payload, session.access_token)
@@ -422,6 +428,7 @@ export default function ShopReport() {
         bags: '',
 
         order_amount: '',
+        basket_value: '',
         notes: '',
       }))
       await refresh()
@@ -441,6 +448,7 @@ export default function ShopReport() {
       time_window: '',
       bags: '',
       order_amount: '',
+      basket_value: '',
       notes: '',
     }))
   }
@@ -455,6 +463,7 @@ export default function ShopReport() {
       time_window: row.time_window || '',
       bags: row.bags ?? '',
       order_amount: row.order_amount ?? '',
+      basket_value: row.basket_value ?? '',
       notes: row.notes ?? '',
     }))
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -504,6 +513,9 @@ export default function ShopReport() {
   const selectedClient = (clients ?? []).find(
     (client) => client.id === formState.client_id
   )
+
+  const newClients =
+    shopStats ? Math.max(0, shopStats.unique_clients - shopStats.repeat_clients) : 0
 
   // [NEW] Find current period freeze details
   const currentFrozenPeriod = (periods ?? []).find(
@@ -797,6 +809,22 @@ export default function ShopReport() {
             </label>
           )}
 
+          <label className="text-sm text-gray-600">
+            Valeur des courses (CHF)
+            <input
+              className="mt-1 w-full rounded border px-2 py-1"
+              type="number"
+              step="0.05"
+              name="basket_value"
+              value={formState.basket_value || ''}
+              onChange={handleChange}
+              placeholder="Optionnel"
+            />
+            <span className="text-xs text-gray-400">
+              Utilise pour la rentabilite, non facture.
+            </span>
+          </label>
+
           {previewError && (
             <div className="md:col-span-2 text-sm text-red-600">
               {previewError}
@@ -861,31 +889,49 @@ export default function ShopReport() {
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="rounded-lg border p-4">
-                <div className="text-sm text-gray-500">Livraisons</div>
+                <div className="text-sm text-gray-500">Livraisons (ce mois)</div>
                 <div className="text-2xl font-semibold">{shopStats.total_deliveries}</div>
                 <div className="text-xs text-gray-400">
                   {formatPercent(shopStats.deliveries_change_pct)} vs {shopStats.previous_month}
                 </div>
               </div>
               <div className="rounded-lg border p-4">
-                <div className="text-sm text-gray-500">Clients uniques</div>
+                <div className="text-sm text-gray-500">Clients servis</div>
                 <div className="text-2xl font-semibold">{shopStats.unique_clients}</div>
                 <div className="text-xs text-gray-400">
-                  Recurrents: {shopStats.repeat_clients} ({shopStats.repeat_rate_pct.toFixed(1)}%)
+                  Nouveaux: {newClients}
                 </div>
               </div>
               <div className="rounded-lg border p-4">
-                <div className="text-sm text-gray-500">Sacs moyens</div>
-                <div className="text-2xl font-semibold">{shopStats.average_bags.toFixed(1)}</div>
-                <div className="text-xs text-gray-400">Total sacs: {shopStats.total_bags}</div>
+                <div className="text-sm text-gray-500">Clients recurrents</div>
+                <div className="text-2xl font-semibold">{shopStats.repeat_clients}</div>
+                <div className="text-xs text-gray-400">
+                  Taux: {shopStats.repeat_rate_pct.toFixed(1)}%
+                </div>
               </div>
               <div className="rounded-lg border p-4">
-                <div className="text-sm text-gray-500">Volume livre</div>
+                <div className="text-sm text-gray-500">Montant facture (TTC)</div>
                 <div className="text-2xl font-semibold">{formatCHF(shopStats.total_volume_chf)}</div>
-                <div className="text-xs text-gray-400">Estimation total CHF</div>
+                <div className="text-xs text-gray-400">Part entreprise regionale</div>
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="rounded-lg border p-4">
+                <div className="text-sm text-gray-500">Sacs livres</div>
+                <div className="text-2xl font-semibold">{shopStats.total_bags}</div>
+                <div className="text-xs text-gray-400">
+                  Moyenne: {shopStats.average_bags.toFixed(1)}
+                </div>
+              </div>
+              <div className="rounded-lg border p-4">
+                <div className="text-sm text-gray-500">Montant des courses</div>
+                <div className="text-2xl font-semibold">
+                  {formatCHF(shopStats.total_basket_value_chf)}
+                </div>
+                <div className="text-xs text-gray-400">
+                  Panier moyen: {formatCHF(shopStats.average_basket_value_chf)}
+                </div>
+              </div>
               <div className="rounded-lg border p-4">
                 <div className="text-sm text-gray-500">Jours actifs</div>
                 <div className="text-2xl font-semibold">{shopStats.active_days}</div>
@@ -904,11 +950,6 @@ export default function ShopReport() {
                 <div className="text-xs text-gray-400">
                   {shopStats.peak_day ? formatDate(shopStats.peak_day) : 'n/a'}
                 </div>
-              </div>
-              <div className="rounded-lg border p-4">
-                <div className="text-sm text-gray-500">Evolution livraisons</div>
-                <div className="text-2xl font-semibold">{formatPercent(shopStats.deliveries_change_pct)}</div>
-                <div className="text-xs text-gray-400">Vs {shopStats.previous_month}</div>
               </div>
             </div>
             <div className="rounded-lg border p-4">
@@ -969,6 +1010,12 @@ export default function ShopReport() {
                       const cell =
                         col === 'amount_due'
                           ? formatCHF(isCancelled ? 0 : Number(row.share_admin_region || 0))
+                          : col === 'basket_value'
+                            ? isCancelled
+                              ? formatCHF(0)
+                              : row.basket_value === null || row.basket_value === undefined || row.basket_value === ''
+                                ? '-'
+                                : formatCHF(Number(row.basket_value))
                           : col === 'status'
                             ? formatStatus(value)
                             : col === 'delivery_date'

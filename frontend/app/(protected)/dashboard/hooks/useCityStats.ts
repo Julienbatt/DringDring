@@ -12,12 +12,15 @@ export type CityStats = {
   active_shops: number
   cms_deliveries: number
   cms_share_pct: number
+  cms_unique_clients: number
   total_bags: number
   average_bags: number
   active_days: number
   deliveries_per_active_day: number
   previous_month_deliveries: number
   deliveries_change_pct: number | null
+  total_subvention_chf: number
+  total_volume_chf: number
 }
 
 export function useCityStats(month?: string) {

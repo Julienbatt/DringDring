@@ -143,6 +143,7 @@ def get_city_billing_deliveries(
                     l.postal_code,
                     l.city_name AS delivery_city,
                     l.bags,
+                    l.is_cms,
                     l.time_window,
                     f.total_price,
                     f.share_admin_region,
@@ -153,8 +154,16 @@ def get_city_billing_deliveries(
                 JOIN city c ON c.id = s.city_id
                 JOIN delivery_logistics l ON l.delivery_id = d.id
                 LEFT JOIN delivery_financial f ON f.delivery_id = d.id
+                LEFT JOIN LATERAL (
+                    SELECT status
+                    FROM delivery_status
+                    WHERE delivery_id = d.id
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ) st ON true
                 WHERE s.city_id = %s
                   AND date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                  AND COALESCE(st.status, '') <> 'cancelled'
                 ORDER BY s.name, d.delivery_date
                 """,
                 (city_id, month_date),
@@ -183,8 +192,16 @@ def get_hq_billing_zip(
                     FROM shop s
                     JOIN city c ON c.id = s.city_id
                     JOIN delivery d ON d.shop_id = s.id
+                    LEFT JOIN LATERAL (
+                        SELECT status
+                        FROM delivery_status
+                        WHERE delivery_id = d.id
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                    ) st ON true
                     WHERE s.hq_id = %s
                       AND date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                      AND COALESCE(st.status, '') <> 'cancelled'
                     GROUP BY s.id, s.name, c.name
                     ORDER BY s.name
                     """,
@@ -211,9 +228,17 @@ def get_hq_billing_zip(
                                 FROM delivery d
                                 JOIN delivery_logistics l ON l.delivery_id = d.id
                                 JOIN delivery_financial f ON f.delivery_id = d.id
+                                LEFT JOIN LATERAL (
+                                    SELECT status
+                                    FROM delivery_status
+                                    WHERE delivery_id = d.id
+                                    ORDER BY updated_at DESC
+                                    LIMIT 1
+                                ) st ON true
                                 WHERE d.shop_id = %s
                                   AND d.delivery_date >= %s::date
                                   AND d.delivery_date < (%s::date + INTERVAL '1 month')
+                                  AND COALESCE(st.status, '') <> 'cancelled'
                                 ORDER BY d.delivery_date
                                 """,
                                 (shop_id, month_date, month_date),
@@ -560,8 +585,16 @@ def get_city_billing_zip(
                     FROM city c
                     JOIN shop s ON s.city_id = c.id
                     JOIN delivery d ON d.shop_id = s.id
+                    LEFT JOIN LATERAL (
+                        SELECT status
+                        FROM delivery_status
+                        WHERE delivery_id = d.id
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                    ) st ON true
                     WHERE date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
                       AND c.admin_region_id = %s
+                      AND COALESCE(st.status, '') <> 'cancelled'
                     ORDER BY c.name
                     """,
                     (month_date, target_region_id),
@@ -573,7 +606,15 @@ def get_city_billing_zip(
                     FROM city c
                     JOIN shop s ON s.city_id = c.id
                     JOIN delivery d ON d.shop_id = s.id
+                    LEFT JOIN LATERAL (
+                        SELECT status
+                        FROM delivery_status
+                        WHERE delivery_id = d.id
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                    ) st ON true
                     WHERE date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                      AND COALESCE(st.status, '') <> 'cancelled'
                     ORDER BY c.name
                     """,
                     (month_date,),
@@ -605,8 +646,16 @@ def get_city_billing_zip(
                             JOIN shop s ON s.id = d.shop_id
                             JOIN delivery_logistics l ON l.delivery_id = d.id
                             JOIN delivery_financial f ON f.delivery_id = d.id
+                            LEFT JOIN LATERAL (
+                                SELECT status
+                                FROM delivery_status
+                                WHERE delivery_id = d.id
+                                ORDER BY updated_at DESC
+                                LIMIT 1
+                            ) st ON true
                             WHERE s.city_id = %s
                               AND date_trunc('month', d.delivery_date) = %s::date
+                              AND COALESCE(st.status, '') <> 'cancelled'
                             ORDER BY s.name, d.delivery_date
                             """,
                             (city_id, month_date),
@@ -841,6 +890,13 @@ def get_hq_billing(
                         LEFT JOIN delivery d
                           ON d.shop_id = s.id
                          AND date_trunc('month', d.delivery_date) = (SELECT month FROM period)
+                        LEFT JOIN LATERAL (
+                            SELECT status
+                            FROM delivery_status
+                            WHERE delivery_id = d.id
+                            ORDER BY updated_at DESC
+                            LIMIT 1
+                        ) st ON true
                         LEFT JOIN delivery_logistics l ON l.delivery_id = d.id
                         LEFT JOIN delivery_financial f ON f.delivery_id = d.id
                         LEFT JOIN billing_period bp
@@ -848,6 +904,7 @@ def get_hq_billing(
                          AND bp.period_month = (SELECT month FROM period)
                         LEFT JOIN auth.users u ON u.id = bp.frozen_by
                         {filter_clause}
+                        AND (d.id IS NULL OR COALESCE(st.status, '') <> 'cancelled')
                         GROUP BY
                             s.id,
                             s.name,
@@ -904,6 +961,7 @@ def get_hq_billing_deliveries(
     Returns detailed deliveries for HQ/admin billing.
     """
     month_date = _parse_month(month)
+    include_basket_value = user.role == "hq"
 
     filter_clause = ""
     filter_params: list[str] = []
@@ -939,6 +997,7 @@ def get_hq_billing_deliveries(
                     l.postal_code,
                     l.city_name AS delivery_city,
                     l.bags,
+                    CASE WHEN %s THEN l.basket_value ELSE NULL END AS basket_value,
                     l.time_window,
                     f.total_price,
                     f.share_city,
@@ -950,11 +1009,19 @@ def get_hq_billing_deliveries(
                   LEFT JOIN city p ON p.id = c.parent_city_id
                 JOIN delivery_logistics l ON l.delivery_id = d.id
                 LEFT JOIN delivery_financial f ON f.delivery_id = d.id
+                LEFT JOIN LATERAL (
+                    SELECT status
+                    FROM delivery_status
+                    WHERE delivery_id = d.id
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ) st ON true
                 WHERE date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                  AND COALESCE(st.status, '') <> 'cancelled'
                 {filter_clause}
                 ORDER BY s.name, d.delivery_date
                 """,
-                (month_date, *filter_params),
+                (include_basket_value, month_date, *filter_params),
             )
             return _rows_to_dicts(cur)
 
@@ -989,11 +1056,19 @@ def get_hq_billing_shops(
                 JOIN city c ON c.id = s.city_id
                 LEFT JOIN hq h ON h.id = s.hq_id
                 JOIN delivery_financial f ON f.delivery_id = d.id
+                LEFT JOIN LATERAL (
+                    SELECT status
+                    FROM delivery_status
+                    WHERE delivery_id = d.id
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ) st ON true
                 LEFT JOIN billing_period bp
                   ON bp.shop_id = s.id
                  AND bp.period_month = date_trunc('month', d.delivery_date)::date
                 WHERE s.hq_id = %s
                   AND date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                  AND COALESCE(st.status, '') <> 'cancelled'
                 GROUP BY
                     h.name,
                     s.id,
@@ -1307,10 +1382,18 @@ def get_hq_monthly_pdf(
                 JOIN city c ON c.id = s.city_id
                 LEFT JOIN hq h ON h.id = s.hq_id
                 JOIN delivery_financial f ON f.delivery_id = d.id
+                LEFT JOIN LATERAL (
+                    SELECT status
+                    FROM delivery_status
+                    WHERE delivery_id = d.id
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ) st ON true
                 LEFT JOIN billing_period bp
                   ON bp.shop_id = s.id
                  AND bp.period_month = date_trunc('month', d.delivery_date)::date
                 WHERE date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                  AND COALESCE(st.status, '') <> 'cancelled'
                 {filter_clause}
                 GROUP BY h.name, s.id, s.name, c.name
                 ORDER BY s.name
@@ -1335,7 +1418,15 @@ def get_hq_monthly_pdf(
                 LEFT JOIN hq h ON h.id = s.hq_id
                 JOIN delivery_logistics l ON l.delivery_id = d.id
                 JOIN delivery_financial f ON f.delivery_id = d.id
+                LEFT JOIN LATERAL (
+                    SELECT status
+                    FROM delivery_status
+                    WHERE delivery_id = d.id
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ) st ON true
                 WHERE date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                  AND COALESCE(st.status, '') <> 'cancelled'
                 {filter_clause}
                 ORDER BY s.name, d.delivery_date
                 """,
@@ -1461,8 +1552,16 @@ def get_city_monthly_pdf(
                 JOIN shop s ON s.id = d.shop_id
                 JOIN delivery_logistics l ON l.delivery_id = d.id
                 JOIN delivery_financial f ON f.delivery_id = d.id
+                LEFT JOIN LATERAL (
+                    SELECT status
+                    FROM delivery_status
+                    WHERE delivery_id = d.id
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ) st ON true
                 WHERE s.city_id = %s
                   AND date_trunc('month', d.delivery_date) = %s::date
+                  AND COALESCE(st.status, '') <> 'cancelled'
                 ORDER BY s.name, d.delivery_date
                 """,
                 (city_id, period_month),
@@ -1600,7 +1699,15 @@ def export_hq_billing(
                 JOIN shop s ON s.id = d.shop_id
                 JOIN city c ON c.id = s.city_id
                 JOIN delivery_financial f ON f.delivery_id = d.id
+                LEFT JOIN LATERAL (
+                    SELECT status
+                    FROM delivery_status
+                    WHERE delivery_id = d.id
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ) st ON true
                 WHERE date_trunc('month', d.delivery_date) = date_trunc('month', %s::date)
+                  AND COALESCE(st.status, '') <> 'cancelled'
                 {filter_clause}
                 GROUP BY
                     s.name,

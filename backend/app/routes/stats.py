@@ -5,7 +5,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.identity import resolve_identity
-from app.core.guards import require_city_user, require_shop_user, require_customer_user
+from app.core.guards import (
+    require_city_user,
+    require_shop_user,
+    require_customer_user,
+    require_hq_user,
+)
 from app.core.security import get_current_user, get_current_user_claims
 from app.db.session import get_db_connection
 
@@ -97,7 +102,15 @@ def get_eco_stats(
                     COALESCE(SUM(COALESCE(d.co2_saved_kg, 0)), 0) AS co2_saved_kg,
                     COUNT(*) AS deliveries
                 FROM delivery d
+                LEFT JOIN LATERAL (
+                    SELECT status
+                    FROM delivery_status
+                    WHERE delivery_id = d.id
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ) st ON true
                 WHERE {" AND ".join(where)}
+                  AND COALESCE(st.status, '') <> 'cancelled'
                 """,
                 tuple(params),
             )
@@ -134,6 +147,7 @@ def get_shop_stats(
                         d.client_id,
                         l.client_name,
                         COALESCE(l.bags, 0) AS bags,
+                        COALESCE(l.basket_value, 0) AS basket_value,
                         COALESCE(f.share_admin_region, 0) AS amount_due,
                         COALESCE(st.status, '') AS status
                     FROM delivery d
@@ -175,6 +189,8 @@ def get_shop_stats(
                     (SELECT COALESCE(SUM(bags), 0) FROM base) AS total_bags,
                     (SELECT COALESCE(AVG(bags), 0) FROM base) AS average_bags,
                     (SELECT COALESCE(SUM(amount_due), 0) FROM base) AS total_volume_chf,
+                    (SELECT COALESCE(SUM(basket_value), 0) FROM base) AS total_basket_value,
+                    (SELECT COALESCE(AVG(NULLIF(basket_value, 0)), 0) FROM base) AS average_basket_value,
                     (SELECT COUNT(*) FROM daily_counts) AS active_days,
                     (SELECT delivery_day FROM peak_day) AS peak_day,
                     (SELECT deliveries FROM peak_day) AS peak_day_deliveries
@@ -254,9 +270,11 @@ def get_shop_stats(
     total_bags = int(stats_row[3] or 0)
     average_bags = float(stats_row[4] or 0)
     total_volume_chf = float(stats_row[5] or 0)
-    active_days = int(stats_row[6] or 0)
-    peak_day = stats_row[7].isoformat() if stats_row[7] else None
-    peak_day_deliveries = int(stats_row[8] or 0)
+    total_basket_value = float(stats_row[6] or 0)
+    average_basket_value = float(stats_row[7] or 0)
+    active_days = int(stats_row[8] or 0)
+    peak_day = stats_row[9].isoformat() if stats_row[9] else None
+    peak_day_deliveries = int(stats_row[10] or 0)
 
     repeat_rate = (repeat_clients / unique_clients * 100) if unique_clients else 0.0
     deliveries_change_pct = None
@@ -277,6 +295,8 @@ def get_shop_stats(
         "total_bags": total_bags,
         "average_bags": round(average_bags, 2),
         "total_volume_chf": round(total_volume_chf, 2),
+        "total_basket_value_chf": round(total_basket_value, 2),
+        "average_basket_value_chf": round(average_basket_value, 2),
         "active_days": active_days,
         "deliveries_per_active_day": round(deliveries_per_active_day, 2),
         "peak_day": peak_day,
@@ -313,13 +333,25 @@ def get_city_stats(
                         d.client_id,
                         d.shop_id,
                         l.is_cms,
-                        COALESCE(l.bags, 0) AS bags
+                        COALESCE(l.bags, 0) AS bags,
+                        COALESCE(f.share_city, 0) AS share_city,
+                        COALESCE(f.total_price, 0) AS total_price,
+                        COALESCE(st.status, '') AS status
                     FROM delivery d
                     JOIN delivery_logistics l ON l.delivery_id = d.id
                     JOIN city c ON c.id = d.city_id
+                    LEFT JOIN delivery_financial f ON f.delivery_id = d.id
+                    LEFT JOIN LATERAL (
+                        SELECT status
+                        FROM delivery_status
+                        WHERE delivery_id = d.id
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                    ) st ON true
                     WHERE (c.id = %s OR c.parent_city_id = %s)
                       AND date_trunc('month', d.delivery_date)
                         = date_trunc('month', %s::date)
+                      AND COALESCE(st.status, '') <> 'cancelled'
                 ),
                 daily_counts AS (
                     SELECT delivery_day, COUNT(*) AS deliveries
@@ -331,9 +363,12 @@ def get_city_stats(
                     (SELECT COUNT(DISTINCT client_id) FROM base WHERE client_id IS NOT NULL) AS unique_clients,
                     (SELECT COUNT(DISTINCT shop_id) FROM base) AS active_shops,
                     (SELECT COUNT(*) FROM base WHERE is_cms IS TRUE) AS cms_deliveries,
+                    (SELECT COUNT(DISTINCT client_id) FROM base WHERE is_cms IS TRUE AND client_id IS NOT NULL) AS cms_unique_clients,
                     (SELECT COALESCE(SUM(bags), 0) FROM base) AS total_bags,
                     (SELECT COALESCE(AVG(bags), 0) FROM base) AS average_bags,
-                    (SELECT COUNT(*) FROM daily_counts) AS active_days
+                    (SELECT COUNT(*) FROM daily_counts) AS active_days,
+                    (SELECT COALESCE(SUM(share_city), 0) FROM base) AS total_subvention,
+                    (SELECT COALESCE(SUM(total_price), 0) FROM base) AS total_volume
                 """,
                 (str(city_id), str(city_id), month_start),
             )
@@ -344,9 +379,17 @@ def get_city_stats(
                 SELECT COUNT(*)
                 FROM delivery d
                 JOIN city c ON c.id = d.city_id
+                LEFT JOIN LATERAL (
+                    SELECT status
+                    FROM delivery_status
+                    WHERE delivery_id = d.id
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ) st ON true
                 WHERE (c.id = %s OR c.parent_city_id = %s)
                   AND date_trunc('month', d.delivery_date)
                     = date_trunc('month', %s::date)
+                  AND COALESCE(st.status, '') <> 'cancelled'
                 """,
                 (str(city_id), str(city_id), prev_month_start),
             )
@@ -356,9 +399,12 @@ def get_city_stats(
     unique_clients = int(stats_row[1] or 0)
     active_shops = int(stats_row[2] or 0)
     cms_deliveries = int(stats_row[3] or 0)
-    total_bags = int(stats_row[4] or 0)
-    average_bags = float(stats_row[5] or 0)
-    active_days = int(stats_row[6] or 0)
+    cms_unique_clients = int(stats_row[4] or 0)
+    total_bags = int(stats_row[5] or 0)
+    average_bags = float(stats_row[6] or 0)
+    active_days = int(stats_row[7] or 0)
+    total_subvention = float(stats_row[8] or 0)
+    total_volume = float(stats_row[9] or 0)
 
     cms_share_pct = (cms_deliveries / total_deliveries * 100) if total_deliveries else 0.0
     deliveries_change_pct = None
@@ -377,8 +423,142 @@ def get_city_stats(
         "active_shops": active_shops,
         "cms_deliveries": cms_deliveries,
         "cms_share_pct": round(cms_share_pct, 1),
+        "cms_unique_clients": cms_unique_clients,
         "total_bags": total_bags,
         "average_bags": round(average_bags, 2),
+        "active_days": active_days,
+        "deliveries_per_active_day": round(deliveries_per_active_day, 2),
+        "previous_month_deliveries": prev_deliveries,
+        "deliveries_change_pct": round(deliveries_change_pct, 1)
+        if deliveries_change_pct is not None
+        else None,
+        "total_subvention_chf": round(total_subvention, 2),
+        "total_volume_chf": round(total_volume, 2),
+    }
+
+
+@router.get("/hq")
+def get_hq_stats(
+    user=Depends(require_hq_user),
+    jwt_claims: str = Depends(get_current_user_claims),
+    month: Optional[str] = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
+):
+    hq_id = user.hq_id
+    if not hq_id:
+        raise HTTPException(status_code=403, detail="HQ access required")
+
+    month_start = _parse_month(month)
+    prev_month_start = _previous_month_start(month_start)
+
+    with get_db_connection(jwt_claims) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH base AS (
+                    SELECT
+                        d.id,
+                        d.delivery_date::date AS delivery_day,
+                        d.client_id,
+                        s.id AS shop_id,
+                        s.city_id AS city_id,
+                        COALESCE(l.bags, 0) AS bags,
+                        COALESCE(l.basket_value, 0) AS basket_value,
+                        COALESCE(f.total_price, 0) AS total_price,
+                        COALESCE(f.share_city, 0) AS share_city,
+                        COALESCE(f.share_admin_region, 0) AS share_admin_region,
+                        COALESCE(st.status, '') AS status
+                    FROM delivery d
+                    JOIN shop s ON s.id = d.shop_id
+                    JOIN delivery_logistics l ON l.delivery_id = d.id
+                    LEFT JOIN delivery_financial f ON f.delivery_id = d.id
+                    LEFT JOIN LATERAL (
+                        SELECT status
+                        FROM delivery_status
+                        WHERE delivery_id = d.id
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                    ) st ON true
+                    WHERE s.hq_id = %s
+                      AND date_trunc('month', d.delivery_date)
+                        = date_trunc('month', %s::date)
+                      AND COALESCE(st.status, '') <> 'cancelled'
+                ),
+                daily_counts AS (
+                    SELECT delivery_day, COUNT(*) AS deliveries
+                    FROM base
+                    GROUP BY delivery_day
+                )
+                SELECT
+                    (SELECT COUNT(*) FROM base) AS total_deliveries,
+                    (SELECT COUNT(DISTINCT client_id) FROM base WHERE client_id IS NOT NULL) AS unique_clients,
+                    (SELECT COUNT(DISTINCT shop_id) FROM base) AS active_shops,
+                    (SELECT COUNT(DISTINCT city_id) FROM base) AS active_cities,
+                    (SELECT COALESCE(SUM(bags), 0) FROM base) AS total_bags,
+                    (SELECT COALESCE(AVG(bags), 0) FROM base) AS average_bags,
+                    (SELECT COALESCE(SUM(total_price), 0) FROM base) AS total_volume,
+                    (SELECT COALESCE(SUM(share_city + share_admin_region), 0) FROM base) AS total_subvention,
+                    (SELECT COALESCE(SUM(basket_value), 0) FROM base) AS total_basket_value,
+                    (SELECT COALESCE(AVG(NULLIF(basket_value, 0)), 0) FROM base) AS average_basket_value,
+                    (SELECT COUNT(*) FROM daily_counts) AS active_days
+                """,
+                (str(hq_id), month_start),
+            )
+            stats_row = cur.fetchone()
+
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM delivery d
+                JOIN shop s ON s.id = d.shop_id
+                LEFT JOIN LATERAL (
+                    SELECT status
+                    FROM delivery_status
+                    WHERE delivery_id = d.id
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ) st ON true
+                WHERE s.hq_id = %s
+                  AND date_trunc('month', d.delivery_date)
+                    = date_trunc('month', %s::date)
+                  AND COALESCE(st.status, '') <> 'cancelled'
+                """,
+                (str(hq_id), prev_month_start),
+            )
+            prev_deliveries = int(cur.fetchone()[0] or 0)
+
+    total_deliveries = int(stats_row[0] or 0)
+    unique_clients = int(stats_row[1] or 0)
+    active_shops = int(stats_row[2] or 0)
+    active_cities = int(stats_row[3] or 0)
+    total_bags = int(stats_row[4] or 0)
+    average_bags = float(stats_row[5] or 0)
+    total_volume = float(stats_row[6] or 0)
+    total_subvention = float(stats_row[7] or 0)
+    total_basket_value = float(stats_row[8] or 0)
+    average_basket_value = float(stats_row[9] or 0)
+    active_days = int(stats_row[10] or 0)
+
+    deliveries_change_pct = None
+    if prev_deliveries:
+        deliveries_change_pct = (total_deliveries - prev_deliveries) / prev_deliveries * 100
+
+    deliveries_per_active_day = (
+        total_deliveries / active_days if active_days else 0.0
+    )
+
+    return {
+        "month": month_start.isoformat()[:7],
+        "previous_month": prev_month_start.isoformat()[:7],
+        "total_deliveries": total_deliveries,
+        "unique_clients": unique_clients,
+        "active_shops": active_shops,
+        "active_cities": active_cities,
+        "total_bags": total_bags,
+        "average_bags": round(average_bags, 2),
+        "total_volume_chf": round(total_volume, 2),
+        "total_subvention_chf": round(total_subvention, 2),
+        "total_basket_value_chf": round(total_basket_value, 2),
+        "average_basket_value_chf": round(average_basket_value, 2),
         "active_days": active_days,
         "deliveries_per_active_day": round(deliveries_per_active_day, 2),
         "previous_month_deliveries": prev_deliveries,

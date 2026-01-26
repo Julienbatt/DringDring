@@ -15,7 +15,7 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 
 class VatRatePayload(BaseModel):
     rate: float = Field(..., gt=0, lt=1)
-    effective_from: str = Field(..., pattern=r"^\\d{4}-\\d{2}$")
+    effective_from: str = Field(..., pattern=r"^\d{4}-\d{2}$")
 
 
 def _parse_month(value: str | None) -> date:
@@ -32,7 +32,7 @@ def _parse_month(value: str | None) -> date:
 def get_vat_rate(
     user: MeResponse = Depends(require_admin_user),
     jwt_claims: str = Depends(get_current_user_claims),
-    month: str | None = Query(default=None, pattern=r"^\\d{4}-\\d{2}$"),
+    month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
 ):
     period_month = _parse_month(month)
 

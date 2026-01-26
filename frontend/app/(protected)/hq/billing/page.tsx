@@ -65,6 +65,7 @@ interface BillingDelivery {
   postal_code: string | null
   delivery_city: string | null
   bags: number | null
+  basket_value: number | string | null
   time_window: string | null
   total_price: number | string | null
   share_admin_region: number | string | null
@@ -243,6 +244,7 @@ function HqBillingContent() {
   const visibleDetails = selectedShopId === 'all'
     ? filteredDetails
     : filteredDetails.filter((row) => row.shop_id === selectedShopId)
+  const showOrderAmount = user?.role === 'hq'
 
   return (
     <div className="space-y-6">
@@ -384,19 +386,22 @@ function HqBillingContent() {
                 <TableHead>NPA</TableHead>
                 <TableHead>Commune</TableHead>
                 <TableHead className="text-right">Sacs</TableHead>
+                {showOrderAmount && (
+                  <TableHead className="text-right">Montant courses</TableHead>
+                )}
                 <TableHead className="text-right">Montant HQ</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {detailLoading ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="h-20 text-center">
+                  <TableCell colSpan={showOrderAmount ? 9 : 8} className="h-20 text-center">
                     Chargement...
                   </TableCell>
                 </TableRow>
               ) : visibleDetails.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="h-20 text-center text-muted-foreground">
+                  <TableCell colSpan={showOrderAmount ? 9 : 8} className="h-20 text-center text-muted-foreground">
                     Aucune livraison pour cette periode.
                   </TableCell>
                 </TableRow>
@@ -410,6 +415,13 @@ function HqBillingContent() {
                     <TableCell>{row.postal_code || '-'}</TableCell>
                     <TableCell>{row.delivery_city || row.city_name}</TableCell>
                     <TableCell className="text-right">{row.bags ?? '-'}</TableCell>
+                    {showOrderAmount && (
+                      <TableCell className="text-right">
+                        {row.basket_value === null || row.basket_value === undefined || row.basket_value === ''
+                          ? '-'
+                          : formatCurrency(row.basket_value)}
+                      </TableCell>
+                    )}
                     <TableCell className="text-right">
                       {formatCurrency(row.share_admin_region || 0)}
                     </TableCell>

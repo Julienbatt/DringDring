@@ -185,6 +185,7 @@ def create_delivery(
                         time_window=payload.time_window,
                         bags=payload.bags,
                         order_amount=payload.order_amount,
+                        basket_value=payload.basket_value,
                         is_cms=payload.is_cms,
                         notes=None,
                         short_code=short_code,
@@ -595,6 +596,7 @@ def list_shop_deliveries(
                     l.time_window,
                     l.bags,
                     l.order_amount,
+                    l.basket_value,
                     l.is_cms,
                     l.notes,
                     st.status,
@@ -645,6 +647,7 @@ def export_shop_deliveries(
                     l.address,
                     l.city_name,
                     l.bags,
+                    l.basket_value,
                     f.share_admin_region,
                     st.status,
                     d.id::text AS delivery_id
@@ -677,6 +680,7 @@ def export_shop_deliveries(
             "Adresse",
             "Commune partenaire",
             "Sacs",
+            "Valeur des courses (CHF)",
             "Montant facture (TTC)",
             "Statut",
             "Delivery ID",
@@ -688,6 +692,7 @@ def export_shop_deliveries(
         address,
         city_name,
         bags,
+        basket_value,
         share_admin_region,
         status,
         delivery_id,
@@ -703,6 +708,7 @@ def export_shop_deliveries(
                 address or "",
                 city_name or "",
                 bags or 0,
+                "" if basket_value is None else f"{float(basket_value or 0):.2f}",
                 f"{float(share_admin_region or 0):.2f}",
                 status or "",
                 delivery_id or "",
@@ -1166,6 +1172,7 @@ def _apply_delivery_update(
             l.time_window,
             l.bags,
             l.order_amount,
+            l.basket_value,
             l.notes,
             l.is_cms
         FROM delivery d
@@ -1185,6 +1192,7 @@ def _apply_delivery_update(
         time_window,
         bags,
         order_amount,
+        basket_value,
         notes,
         is_cms,
     ) = row
@@ -1215,6 +1223,9 @@ def _apply_delivery_update(
     new_bags = payload.bags if payload.bags is not None else bags
     new_order_amount = (
         payload.order_amount if payload.order_amount is not None else order_amount
+    )
+    new_basket_value = (
+        payload.basket_value if payload.basket_value is not None else basket_value
     )
     new_notes = payload.notes if payload.notes is not None else notes
 
@@ -1285,10 +1296,11 @@ def _apply_delivery_update(
         SET time_window = %s,
             bags = %s,
             order_amount = %s,
+            basket_value = %s,
             notes = %s
         WHERE delivery_id = %s
         """,
-        (new_time_window, new_bags, new_order_amount, new_notes, delivery_id),
+        (new_time_window, new_bags, new_order_amount, new_basket_value, new_notes, delivery_id),
     )
 
     cur.execute(
@@ -1330,6 +1342,7 @@ def _apply_delivery_update(
         "delivery_date": new_delivery_date,
         "bags": new_bags,
         "order_amount": new_order_amount,
+        "basket_value": new_basket_value,
         "share_admin_region": str(s_admin),
     }
 
@@ -1458,6 +1471,7 @@ def _create_delivery_core(
         time_window=payload.time_window,
         bags=payload.bags,
         order_amount=payload.order_amount,
+        basket_value=payload.basket_value,
         is_cms=client["is_cms"],
         notes=payload.notes,
         short_code=short_code,
@@ -1573,6 +1587,7 @@ def _insert_delivery_logistics(
     time_window: str,
     bags: int,
     order_amount: Decimal | float | None,
+    basket_value: Decimal | float | None,
     is_cms: bool,
     notes: str | None = None,
     short_code: str | None = None,
@@ -1589,9 +1604,10 @@ def _insert_delivery_logistics(
                 time_window,
                 bags,
                 order_amount,
+                basket_value,
                 is_cms,
                 short_code
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 delivery_id,
@@ -1601,6 +1617,7 @@ def _insert_delivery_logistics(
                 time_window,
                 bags,
                 order_amount,
+                basket_value,
                 is_cms,
                 short_code,
             ),
@@ -1618,10 +1635,11 @@ def _insert_delivery_logistics(
             time_window,
             bags,
             order_amount,
+            basket_value,
             is_cms,
             notes,
             short_code
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             delivery_id,
@@ -1632,6 +1650,7 @@ def _insert_delivery_logistics(
             time_window,
             bags,
             order_amount,
+            basket_value,
             is_cms,
             notes,
             short_code
