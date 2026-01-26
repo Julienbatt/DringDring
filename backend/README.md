@@ -47,7 +47,7 @@ Tous les mots de passe sont : `password`
 
 ## Database migrations
 
-Recommended order for a fresh database:
+Recommended order for a fresh database (includes latest billing + stats work):
 
 1. `backend/generated_schema.sql`
 2. `backend/migrations/update_schema_v2.sql`
@@ -65,14 +65,34 @@ Recommended order for a fresh database:
 14. `backend/migrations/update_customer_link_v17.sql`
 15. `backend/migrations/update_security_v18.sql`
 16. `backend/migrations/update_security_v19.sql`
-17. `backend/migrations/update_tariff_constraints_v25.sql`
-18. `backend/migrations/update_security_v26.sql`
-19. `backend/migrations/update_security_v27.sql`
-20. `backend/migrations/update_billing_period_pdf_generated_at_v28.sql`
-21. `backend/migrations/update_billing_period_frozen_comment_v29.sql`
-22. `backend/migrations/update_geo_distance_v30.sql`
-23. `backend/migrations/update_city_fields_v31.sql`
-24. `backend/migrations/update_city_hierarchy_v32.sql`
+17. `backend/migrations/update_cantons_v20.sql`
+18. `backend/migrations/update_security_v21.sql`
+19. `backend/migrations/update_security_v22.sql`
+20. `backend/migrations/update_security_v23.sql`
+21. `backend/migrations/update_tariff_share_v24.sql`
+22. `backend/migrations/update_tariff_constraints_v25.sql`
+23. `backend/migrations/update_security_v26.sql`
+24. `backend/migrations/update_security_v27.sql`
+25. `backend/migrations/update_billing_period_pdf_generated_at_v28.sql`
+26. `backend/migrations/update_billing_period_frozen_comment_v29.sql`
+27. `backend/migrations/update_geo_distance_v30.sql`
+28. `backend/migrations/update_city_fields_v31.sql`
+29. `backend/migrations/update_city_hierarchy_v32.sql`
+30. `backend/migrations/update_security_v33.sql`
+31. `backend/migrations/update_hq_fields_v34.sql`
+32. `backend/migrations/update_billing_period_comment_v35.sql`
+33. `backend/migrations/update_settings_v36.sql`
+34. `backend/migrations/update_billing_documents_v37.sql`
+35. `backend/migrations/update_security_v38.sql`
+36. `backend/migrations/update_admin_region_billing_v39.sql`
+37. `backend/migrations/update_billing_documents_v40.sql`
+38. `backend/migrations/update_admin_region_logo_v41.sql`
+39. `backend/migrations/update_security_v42.sql`
+40. `backend/migrations/update_admin_region_internal_billing_v43.sql`
+41. `backend/migrations/update_admin_region_internal_logo_v44.sql`
+42. `backend/migrations/update_billing_documents_v45.sql`
+43. `backend/migrations/update_billing_views_v46.sql`
+44. `backend/migrations/update_delivery_logistics_basket_value_v47.sql`
 
 Legacy tariff upgrade (only if your DB still has `public.tariff` + `tariff_version.tariff_id`):
 
